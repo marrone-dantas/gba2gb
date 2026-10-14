@@ -5,14 +5,13 @@ in R0-R3; R0 must match bit for bit (HRAM $FF80-$FF83).
 Seeds per kernel: LOCKSTEP_SEEDS environment variable (default 1000).
 SM83 cycles measured by the runtime timer are written to build/cycles.csv."""
 import os
-import random
 import subprocess
 import glob
-import zlib
 import pytest
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB
 from unicorn import arm_const as U
 from elftools.elf.elffile import ELFFile
+from tools.profile.seeds import seeds as _seeds
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KDIR = os.path.join(ROOT, "tests", "kernels")
@@ -88,12 +87,7 @@ class GB:
 
 
 def seeds(name):
-    rnd = random.Random(zlib.crc32(name.encode()))  # deterministic
-    fixed = [(0, 0, 0, 0), (0xFFFFFFFF,) * 4, (0x80000000, 0x7FFFFFFF, 1, 0xFFFFFFFF), (1, 2, 3, 4)]
-    out = fixed[:SEEDS]
-    while len(out) < SEEDS:
-        out.append(tuple(rnd.getrandbits(32) for _ in range(4)))
-    return out
+    return _seeds(name, SEEDS)
 
 
 @pytest.mark.parametrize("kernel", KERNELS)
