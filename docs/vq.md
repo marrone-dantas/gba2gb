@@ -36,3 +36,38 @@
    * `classes.bin`: uint16 source class per cell, where a class is a distinct GBA composite 8x8 cell.
    * `lut_tile_remap.bin`: uint8 GB tile per class, the runtime remap table (one 256-byte page per 256 classes).
    * `compile.json`.
+
+## 3.4 Parallax baker (`tools/vq/parallax_baker.py`)
+The DMG has one opaque BG layer, so the two layers are composited offline:
+* The far layer is the lowest-priority BG (or `--far N`). All the other BGs are merged into the near layer.
+* Near scroll is x and far scroll is r·x (default r = 1/2), which offsets the far layer by d = x − r·x
+  relative to the near tile grid: phase p = d mod 8, coarse k = d div 8 (32 values for a 256 px far map).
+* For each of the 8 phases, the composite tiles of every (cell, k) are quantized with shared
+  edge-aware cuts and deduplicated.
+* The codebook is **shared by all phases** because a DMG cannot reload a 4 KiB codebook within
+  a frame (no HDMA). When the union is bigger than K = 256, it is vector-quantized (solid near tiles pinned).
+* Each (p, k) gets a 32x18 tilemap (576 B). The maps are packed into MBC5 16 KiB banks
+  (28 maps per bank, 256 maps = 10 banks); `layout.json` gives bank and address per (p, k).
+* Runtime plan, not implemented in a ROM yet: on a phase change, select the bank, copy the 576 B map
+  into the hidden BG map ($9800/$9C00) during mode 0/1 over about 1–2 frames, then flip LCDC.3.
+  With r = 1/2, d changes every 2 frames at 1 px/frame.
+
+Codebook pressure (`pressure_union` = unique composite tiles over all phases and offsets / 256):
+
+| scene | static tiles (d=0) | unique per phase | union | pressure | codewords | exact | tile MSE (levels²/px) | ROM banks |
+|---|---|---|---|---|---|---|---|---|
+| platformer_a | 133 | 133-133 | 133 | 0.52 | 133 | yes | 0.0000 | 10 |
+| platformer_b | 110 | 149-163 | 532 | 2.08 | 256 | no | 0.0028 | 10 |
+| proc_hills | 48 | 48-48 | 57 | 0.22 | 57 | yes | 0.0000 | 10 |
+| tiny-ski_0 | 105 | 292-364 | 1896 | 7.41 | 255 | no | 0.0116 | 10 |
+| tiny-ski_1 | 114 | 375-441 | 2486 | 9.71 | 255 | no | 0.0219 | 10 |
+| tiny-dungeon_0 | 68 | 172-240 | 1316 | 5.14 | 256 | no | 0.0835 | 10 |
+| tiny-dungeon_1 | 79 | 186-241 | 1205 | 4.71 | 256 | no | 0.0802 | 10 || proc_hills (far = hills BG1, sky off) | 45 | 49-57 | 363 | 1.42 | 256 | no | 0.0031 | 10 |
+
+How to read the table:
+* With a pressure ≤ 1 (platformer_a, proc_hills with the sky as far layer), all phases are exact. In
+  platformer_a the far strip falls into a single DMG level, so the parallax is not visible on the DMG at all.
+* Busy far layers (tiny-ski, tiny-dungeon: the whole terrain used as far layer) need 5–10x the
+  codebook. Shared VQ to 256 tiles then costs 0.01–0.08 levels² MSE per pixel.
+* A single phase alone fits in 256 tiles in every scene (≤ 441 for tiny-ski_1 is the exception: it does not).
+* Practical rule: bake parallax only for far layers with low tile variety (sky, distant hills).

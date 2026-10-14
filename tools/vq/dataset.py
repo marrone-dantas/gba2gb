@@ -137,7 +137,7 @@ def kenney_scenes():
         for x in range(0, 256, 24):
             for r in range(3):
                 t = bgs.tile(r * 8 + col0 + (x // 24) % ncol)
-                y0 = 160 - 72 + 24 * r
+                y0 = 48 + 24 * r                  # visible above the terrain
                 far[y0:y0 + 24, x:min(x + 24, 256)] = t[:, :min(24, 256 - x)]
         layers = [{"rgba": bg_canvas(deco, 0, h * 16 - 160), "prio": 0, "solid": np.zeros((32, 32), bool)},
                   {"rgba": bg_canvas(near, 0, h * 16 - 160), "prio": 1, "solid": cells8(ne, 0, h * 16 - 160, 16)},

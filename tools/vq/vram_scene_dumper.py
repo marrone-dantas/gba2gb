@@ -52,7 +52,19 @@ def visible_bgs(s):
     return out, unsupported
 
 
-def render_bg(s, p):
+def render_map(s, n):
+    """Whole map of text BG n (map size, no scroll) -> (ci, entry, rgba)."""
+    p = dict(bg_params(s, n), hofs=0, vofs=0)
+    bw, bh = p["size"]
+    ci, ent = render_bg(s, p, bw, bh)
+    pal = np.array([u16(s["pal"], 2 * i) for i in range(256)])
+    rgba = np.zeros((bh, bw, 4), np.uint8)
+    rgba[..., :3] = bgr555_to_rgb(pal)[ci]
+    rgba[..., 3] = np.where(ci != 0, 255, 0)
+    return ci, ent, rgba
+
+
+def render_bg(s, p, W=W, H=H):
     """-> (colour index 0-255 incl. palette bank, uint16 [H, W]; 0 = transparent),
           map entry per pixel (uint16 [H, W])."""
     vram, sbb = s["vram"], p["sbb"]
