@@ -53,3 +53,38 @@ instruction definition (200 seeds) lies inside its proven range, for all 20 kern
 - Data-dependent loops (gcd, isqrt, popcount, `while (n--)` with `subs`/`bne`) are not
   bounded: only `cmp`-guarded counters with constant init/step are enumerated exactly.
 - ADC/SBC/ROR results are TOP (k16 64-bit arithmetic).
+
+## Part B (pruning + narrowed backend)
+- **B0** interprocedural ranges for direct BL (small gain: +1 narrow value in k17).
+  Stack-slot tracking was **not** implemented: the only push/pop spills in the 20 kernels
+  are callee-saved registers whose values are the caller's (TOP), so it would not narrow
+  anything without a memory/alias analysis of the stack arrays.
+- **B1** `tools/prune/bitwidth_pruning.py` — see `docs/bitwidth_pruning.md`.
+- **B2** `tools/backend/narrow.py` + `tools/backend/flags.py`; report in
+  `docs/phase1_report.md` (`python -m tools.prune.report`). Lockstep: 20/20 kernels ×
+  1000 seeds pass in phase0, sound and profile modes (no guard fired).
+
+### Acceptance targets (vs Phase 0)
+| target | result | status |
+|---|---|---|
+| −55% M-cycles | −62% total, −60% mean per kernel (sound) | **met** |
+| −50% WRAM | −5% (442 → 418 bytes touched) | **not met** |
+
+Where the cycle gain comes from (honest breakdown, see the `flags` column): most of it is
+*not* bit-width related — flag elision and cheaper constant shifts/multiplies already give
+−57% total; narrowing to 8/16-bit storage adds the remaining ~5 points (much more on
+byte-heavy kernels: k12 −88%, k18 −83%, k02 −74%). k09 (−5%) is pure 32×32 MUL with
+unknown operands.
+
+Why WRAM did not move: WRAM holds the *emulated ARM stack* (callee-saved spills, LR,
+local arrays) plus a few bytes of SM83 return addresses. Its layout is fixed by the
+ARM code (SP-relative addresses), and register narrowing never touches it. The HRAM
+register file barely shrinks either (−1%) because r0-r3 arrive as 32-bit arguments and
+each register keeps the width of its widest SSA value. What would close the gap:
+1. do not spill LR (returns use the SM83 call stack): −4 B per frame;
+2. treat the kernel entry as a whole-program root and drop callee-saved spills/restores
+   of registers whose caller values are dead (needs an ABI opt-out at the entry);
+3. stack-frame re-layout: memory SSA over SP-relative slots + proof that no slot
+   address escapes, then narrow each slot/array element to its proven width
+   (k05/k06/k18 arrays) and pack the frame;
+4. register-file allocation by SSA web instead of a fixed 4-byte slot per ARM register.

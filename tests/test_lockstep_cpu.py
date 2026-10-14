@@ -8,17 +8,14 @@ import os
 import subprocess
 import glob
 import pytest
-from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB
-from unicorn import arm_const as U
-from elftools.elf.elffile import ELFFile
 from tools.profile.seeds import seeds as _seeds
+from tools.harness import RefARM, GB
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KDIR = os.path.join(ROOT, "tests", "kernels")
 BUILD = os.path.join(ROOT, "build")
 SEEDS = int(os.environ.get("LOCKSTEP_SEEDS", "1000"))
-SP0 = 0x03001F00
-SENTINEL = 0x08F00000
+from tools.harness import SP0, SENTINEL  # noqa: F401
 KERNELS = sorted(os.path.basename(p)[:-2] for p in glob.glob(os.path.join(KDIR, "k*.c")))
 
 
@@ -29,75 +26,37 @@ def build_kernels():
     yield
 
 
-class RefARM:
-    def __init__(self, elf):
-        self.uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
-        self.uc.mem_map(0x08000000, 0x01000000)
-        self.uc.mem_map(0x03000000, 0x10000)
-        with open(elf, "rb") as fh:
-            e = ELFFile(fh)
-            t = e.get_section_by_name(".text")
-            self.uc.mem_write(t["sh_addr"], t.data())
-            self.entry = [s["st_value"] for s in e.get_section_by_name(".symtab").iter_symbols()
-                          if s.name == "f"][0] & ~1
-
-    def run(self, regs):
-        uc = self.uc
-        for r, v in zip((U.UC_ARM_REG_R0, U.UC_ARM_REG_R1, U.UC_ARM_REG_R2, U.UC_ARM_REG_R3), regs):
-            uc.reg_write(r, v)
-        uc.reg_write(U.UC_ARM_REG_SP, SP0)
-        uc.reg_write(U.UC_ARM_REG_LR, SENTINEL | 1)
-        uc.emu_start(self.entry | 1, SENTINEL, count=2_000_000)
-        return uc.reg_read(U.UC_ARM_REG_R0) & 0xFFFFFFFF
-
-
-class GB:
-    def __init__(self, rom):
-        from pyboy import PyBoy
-        self.pb = PyBoy(rom, window="null", sound_emulated=False)
-        self.pb.set_emulation_speed(0)
-        # wait for PyBoy's boot ROM to finish and the runtime to reach its wait loop
-        for _ in range(600):
-            self.pb.tick(1, False)
-            if self.pb.register_file.PC >= 0x150:
-                break
-        self.pb.tick(1, False)
-
-    def run(self, regs):
-        m = self.pb.memory
-        for n, v in enumerate(list(regs) + [0] * 9 + [SP0, 0]):
-            for i in range(4):
-                m[0xFF80 + 4 * n + i] = (v >> (8 * i)) & 0xFF
-        for a in range(0xFFC0, 0xFFC4):
-            m[a] = 0
-        m[0xFFD1] = 0
-        m[0xFFD0] = 1
-        for _ in range(20000):
-            self.pb.tick(1, False)
-            if m[0xFFD1] == 1:
-                break
-        else:
-            raise TimeoutError("SM83 kernel did not finish")
-        r0 = sum(m[0xFF80 + i] << (8 * i) for i in range(4))
-        mcyc = ((m[0xFFD3] << 8 | m[0xFFD2]) * 256 + m[0xFFD4]) * 4
-        return r0, mcyc
-
-    def stop(self):
-        self.pb.stop(save=False)
-
-
 def seeds(name):
     return _seeds(name, SEEDS)
 
 
+MODES = ["phase0", "sound", "profile"]
+
+
+def profile_for(elf):
+    from tools.profile.range_tracer import trace_kernel
+    name = os.path.basename(elf)[:-4]
+    p = os.path.join(BUILD, "profiles", name + ".json")
+    if not os.path.exists(p) or os.path.getmtime(p) < os.path.getmtime(elf):
+        trace_kernel(elf, SEEDS, p)
+    import json
+    return json.load(open(p))
+
+
+@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("kernel", KERNELS)
-def test_lockstep(kernel):
+def test_lockstep(kernel, mode):
+    """phase0: Phase 0 backend; sound: proven-range pruning; profile: observed-range
+    pruning with guards (a guard firing fails the test)."""
     import sys
     sys.path.insert(0, ROOT)
     from tools.backend.gba2gbc_core import build
     elf = os.path.join(BUILD, "kernels", kernel + ".elf")
-    rom = os.path.join(BUILD, "roms", kernel + ".gbc")
-    build(elf, rom, asm_out=os.path.join(BUILD, "roms", kernel + ".asm"))
+    tag = "" if mode == "phase0" else "." + mode
+    rom = os.path.join(BUILD, "roms", kernel + tag + ".gbc")
+    prof = profile_for(elf) if mode == "profile" else None
+    build(elf, rom, asm_out=os.path.join(BUILD, "roms", kernel + tag + ".asm"),
+          prune=None if mode == "phase0" else mode, profile=prof)
     ref, gb = RefARM(elf), GB(rom)
     total = 0
     failures = []
@@ -113,6 +72,6 @@ def test_lockstep(kernel):
     finally:
         gb.stop()
     with open(os.path.join(BUILD, "cycles.csv"), "a") as fh:
-        fh.write(f"{kernel},{SEEDS},{total / SEEDS:.0f}\n")
+        fh.write(f"{kernel},{mode},{SEEDS},{total / SEEDS:.0f}\n")
     assert not failures, "mismatches (R0..R3, expected, got): " + "; ".join(
         f"{tuple(hex(v) for v in s)} {e:#010x} {g:#010x}" for s, e, g in failures)

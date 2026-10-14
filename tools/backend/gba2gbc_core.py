@@ -19,9 +19,22 @@ def run(cmd):
         raise RuntimeError(f"{' '.join(cmd)}\n{r.stdout}{r.stderr}")
 
 
-def build(src, out, entry="f", asm_out=None):
+def build(src, out, entry="f", asm_out=None, prune=None, profile=None):
+    """prune: None (Phase 0), 'flags' (narrowed backend but all values 32-bit),
+    'sound' (proven ranges) or 'profile' (observed ranges + guards; needs profile)."""
     prog = lift_file(src, entry)
-    asm = generate_asm(prog)
+    if prune:
+        from tools.prune.bitwidth_pruning import build_plan
+        from tools.backend.narrow import generate_narrow_asm
+        plan = build_plan(prog, profile, "profile" if prune == "profile" else "sound")
+        if prune == "flags":
+            plan.mode = "flags-only"
+            plan.storage = {}
+            plan.fused, plan.deleted = {}, set()
+        asm, stats = generate_narrow_asm(plan)
+        prog.plan, prog.stats = plan, stats
+    else:
+        asm = generate_asm(prog)
     with tempfile.TemporaryDirectory() as td:
         k = asm_out or os.path.join(td, "kernel.asm")
         open(k, "w").write(asm)
@@ -39,8 +52,13 @@ def main(argv=None):
     ap.add_argument("-o", "--output", required=True)
     ap.add_argument("--entry", default="f")
     ap.add_argument("--asm")
+    ap.add_argument("--prune", choices=["flags", "sound", "profile"],
+                    help="Phase 1 bit-width pruning mode (default: Phase 0 code)")
+    ap.add_argument("--profile", help="range profile JSON (required for --prune profile)")
     a = ap.parse_args(argv)
-    p = build(a.input, a.output, a.entry, a.asm)
+    import json
+    prof = json.load(open(a.profile)) if a.profile else None
+    p = build(a.input, a.output, a.entry, a.asm, a.prune, prof)
     print(f"{a.output}: {len(p.ins)} Thumb instructions translated")
 
 

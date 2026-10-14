@@ -17,6 +17,7 @@ The generated SM83 code keeps the ARM7 (Thumb mode) CPU state in HRAM, accessibl
 | `$FFD1`         | DONE: runtime writes 1 when finished (end marker) |
 | `$FFD2-$FFD3`   | timer overflow counter (cycle measurement) |
 | `$FFD4`         | TIMA sampled at the end                    |
+| `$FFD5`         | GUARD: id of a failed range guard (then DONE = 2) |
 
 R15 (PC) is not materialized: control flow is translated statically.
 R14 (LR) receives the ARM return address on `BL`, but the actual return uses the SM83

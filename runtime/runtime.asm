@@ -49,6 +49,16 @@ Start:
     ldh [HR_DONE], a     ; end marker
     jr .wait
 
+; GuardTrap: debug handler for failed profile-guided range guards.
+; a = guard id. Records it, marks DONE = 2 and stops.
+GuardTrap::
+    di
+    ldh [HR_GUARD], a
+    ld a, 2
+    ldh [HR_DONE], a
+.halt:
+    jr .halt
+
 TimerISR:
     push af
     ldh a, [HR_TCNT]
@@ -209,12 +219,15 @@ StoreC:
 
 ; ---- MUL: T0 = T1 * T2 (low 32 bits); clobbers T1, T2 ----------------
 MUL32::
+    ld c, 32
+; MUL32N: same, but only c iterations (c = bit length of the multiplier T2, or
+; 8 * the number of result bytes needed; used by the narrowed backend)
+MUL32N::
     xor a
     ldh [HR_T0], a
     ldh [HR_T0+1], a
     ldh [HR_T0+2], a
     ldh [HR_T0+3], a
-    ld c, 32
 .lp:
     ; T2 >>= 1, shifted-out bit goes to carry
     ld hl, HR_T2+3

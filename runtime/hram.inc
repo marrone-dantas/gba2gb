@@ -30,5 +30,6 @@ DEF HR_START EQU $FFD0 ; harness writes 1 to start the kernel
 DEF HR_DONE  EQU $FFD1 ; runtime writes 1 at the end (end marker)
 DEF HR_TCNT  EQU $FFD2 ; timer overflow counter (16-bit LE)
 DEF HR_TIMA  EQU $FFD4 ; TIMA sampled at the end
+DEF HR_GUARD EQU $FFD5 ; id of the failed range guard (DONE = 2)
 ; Emulated ARM memory: ARM address -> $C000 | (addr & $1FFF) (8 KiB WRAM)
 ; Native SM83 stack: starts at $D000 and grows downward.
