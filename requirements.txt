@@ -1,0 +1,6 @@
+capstone
+unicorn
+pyboy
+networkx
+pytest
+pyelftools
