@@ -7,7 +7,7 @@ k-th `swi 5`). At that moment OAM/VRAM/PAL/IO are snapshotted (state produced by
 frame k-1); KEYINPUT reads during frame k return the keys of inputs[k]."""
 from __future__ import annotations
 from elftools.elf.elffile import ELFFile
-from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_MEM_READ, UC_HOOK_INTR
+from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_HOOK_INTR
 from unicorn import arm_const as U
 
 GBA_KEYS = ["a", "b", "select", "start", "right", "left", "up", "down", "r", "l"]
@@ -33,6 +33,11 @@ class GBARef:
         self.frame, self.vline, self.inputs, self.snaps = 0, 0, [], []
         uc.hook_add(UC_HOOK_MEM_READ, self._io_read, begin=0x04000000, end=0x040003FF)
         uc.hook_add(UC_HOOK_INTR, self._intr)
+        self.writes = []      # (frame, address, size, value) of sound / DMA / timer register writes
+        uc.hook_add(UC_HOOK_MEM_WRITE, self._io_write, begin=0x04000060, end=0x0400010F)
+
+    def _io_write(self, uc, access, addr, size, value, ud):
+        self.writes.append((self.frame, addr, size, value & ((1 << (8 * size)) - 1)))
 
     def _boundary(self):
         self.frame += 1

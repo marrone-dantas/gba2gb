@@ -19,7 +19,8 @@ def analyze(ssa):
         raise InterceptError("objects >= 32 are not supported by the GBA OAM mirror")
     cnt = bg0cnt(ssa, acc)
     oam_st = {a: d for a, d in acc.items() if d["region"] == "oam" and d["store"]}
-    return acc, {"nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st}
+    io_st = {a: d for a, d in acc.items() if d["region"] == "io" and d["store"]}
+    return acc, {"nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st, "io_stores": io_st}
 
 
 def classify_phase0(prog):
@@ -63,4 +64,13 @@ def hal_sections(elf_path, prog, info, affine=None):
     from tools.affine.affine_lut_baker import bake_program
     aff_asm, rep = bake_program(elf_path, info["oam_stores"], **(affine or {}))
     info["affine"] = rep
-    return "\n".join(L) + "\n" + aff_asm
+    from tools.audio.dsound_convert import convert_program, stub_asm
+    if any(d["region"] == "io" and d["store"] and d["const"] == 0x040000BC for d in info["io_stores"].values()):
+        from tools.hal.gba_ref import GBARef
+        ref = GBARef(elf_path)
+        ref.run([0] * 400, 400)
+        snd_asm, srep = convert_program(elf_path, ref.writes)
+    else:
+        snd_asm, srep = stub_asm(), {"sfx": []}
+    info["audio"] = srep
+    return "\n".join(L) + "\n" + aff_asm + snd_asm

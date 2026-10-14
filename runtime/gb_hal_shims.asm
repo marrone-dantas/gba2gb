@@ -101,6 +101,8 @@ HalStart:
     ld bc, $0300
     call MemClear                 ; shadow OAM, GBA OAM mirror, HAL state
     call AffInit                  ; pre-rotated affine frames (LCD off; stub if unused)
+    xor a
+    ldh [$FF26], a                ; APU off, like SOUNDCNT_X at GBA reset
     ld hl, DmaRoutine
     ld c, LOW(HRAM_DMA)
     ld b, DmaRoutineEnd - DmaRoutine
@@ -921,3 +923,4 @@ BgpPerm: db $E4, $E1, $C6, $27   ; BGP for L0 = 0..3 (swap shades 0 and L0)
 BgpFlat: db $00, $55, $AA, $FF   ; BG0 off: everything = L0
 
 INCLUDE "hal_luts.inc"
+INCLUDE "gb_audio_shims.asm"

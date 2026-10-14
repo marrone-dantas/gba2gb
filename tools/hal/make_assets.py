@@ -68,6 +68,23 @@ def sin_lut():
     return [int(round(256 * math.sin(2 * math.pi * i / 256))) & 0xFFFF for i in range(256)]
 
 
+def sfx_zap(fs=8192, dur=0.3):
+    """Original SFX: descending chirp with decay, 8-bit signed PCM at 8192 Hz."""
+    import math
+    n = int(fs * dur) // 32 * 32
+    out, ph = [], 0.0
+    for i in range(n):
+        t = i / fs
+        f = 1800 * (1 - t / dur) + 250
+        ph += 2 * math.pi * f / fs
+        env = (1 - t / dur) ** 1.5
+        v = math.sin(ph) * 0.8 + (0.2 if math.sin(ph * 0.5) > 0 else -0.2)
+        out.append(int(max(-127, min(127, round(110 * env * v)))) & 0xFF)
+    while len(out) % 4:
+        out.append(0)
+    return out
+
+
 def key_tiles():
     out = []
     for st in range(4):  # up, hit, released, held
@@ -138,6 +155,10 @@ def main():
     s.append(f"#define SHIP_TILE_WORDS {len(st)}")
     s.append(arr("ship_tiles", "u32", st))
     s.append(arr("sin_lut", "s16", sin_lut(), "(s16)0x{:04X}"))
+    z = sfx_zap()
+    s.append(f"#define SFX_LEN {len(z)}")
+    s.append("__attribute__((aligned(4)))")
+    s.append(arr("sfx_zap", "u8", z, "0x{:02X}"))
     s.append("#endif")
     print("\n".join(s))
 

@@ -227,7 +227,8 @@ class Gen:
         raise LiftError(f"backend: unsupported op {op} ({x.text})")
 
     # ---- Phase 2: statically intercepted accesses (tools/hal/intercept.py) ----
-    IO_WR = {0x000: "DISPCNT", 0x010: "BG0HOFS", 0x012: "BG0VOFS"}
+    IO_WR = {0x000: "DISPCNT", 0x010: "BG0HOFS", 0x012: "BG0VOFS",
+             0x0BC: "DMA1SAD", 0x0C6: "DMA1CNT_H", 0x102: "TM0CNT_H"}
     IO_RD = {0x006: "VCOUNT", 0x130: "KEYINPUT"}
 
     def load_bytes(self, rd, n, signed):
@@ -265,7 +266,10 @@ class Gen:
         if reg == "io":
             off = acc["const"] - 0x04000000
             name = (self.IO_WR if st else self.IO_RD).get(off)
-            if name and st:
+            if st and 0x60 <= off < 0xA0:
+                # GBA sound registers + wave RAM -> DMG APU (Phase 4.3, docs/audio.md)
+                self.e(f"ld c, LOW({h(rd)})", f"ld b, ${off:02X}", f"ld e, {n}", "call HAL_SND_WR")
+            elif name and st:
                 self.e(f"ld c, LOW({h(rd)})", f"call HAL_WR_{name}")
             elif name:
                 self.e(f"ld c, LOW({h(rd)})", f"call HAL_{name}")

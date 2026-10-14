@@ -2,7 +2,7 @@
 CC=arm-none-eabi-gcc
 CFLAGS=-mcpu=arm7tdmi -mthumb -O2 -ffreestanding -nostdlib -fno-builtin -fno-jump-tables -fno-pic -fno-tree-loop-distribute-patterns
 OUT=../../build/demos
-DEMOS=obj_demo key_demo brin_demo oam_stress input_test affine_demo
+DEMOS=obj_demo key_demo brin_demo oam_stress input_test affine_demo sound_demo
 all: $(DEMOS:%=$(OUT)/%.elf)
 assets.h: ../../tools/hal/make_assets.py
 	python3 ../../tools/hal/make_assets.py > $@

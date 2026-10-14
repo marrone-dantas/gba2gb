@@ -10,6 +10,8 @@
  *   memdump NAME       write OUTDIR/NAME/{ewram,iwram}.bin (for RAM searches)
  *   snap NAME          write OUTDIR/NAME/{vram,pal,io,oam}.bin + screen.ppm + meta.json
  *                      (tools/vq/snapshot.py directory format)
+ *   audio FILE         from now on append the mixed audio (int16 stereo, 32768 Hz)
+ *                      to OUTDIR/FILE (Phase 4.3 reference recordings)
  * Keys: A B SELECT START RIGHT LEFT UP DOWN R L.
  * IO is taken from mGBA's register file (memory.io), which keeps the last value written
  * to write-only registers such as BGxHOFS. */
@@ -18,6 +20,7 @@
 #include <mgba/internal/gba/gba.h>
 #include <mgba-util/vfs.h>
 #include <mgba/core/log.h>
+#include <mgba/core/blip_buf.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,9 +48,25 @@ static int keymask(const char* s) {
 	return m;
 }
 
+static FILE* audio;
+static void drain_audio(void) {
+	if (!audio) return;
+	blip_t* l = core->getAudioChannel(core, 0);
+	blip_t* r = core->getAudioChannel(core, 1);
+	short bl[4096], br[4096], st[8192];
+	int n;
+	while ((n = blip_samples_avail(l)) > 0) {
+		if (n > 4096) n = 4096;
+		blip_read_samples(l, bl, n, 0);
+		blip_read_samples(r, br, n, 0);
+		for (int i = 0; i < n; ++i) { st[2 * i] = bl[i]; st[2 * i + 1] = br[i]; }
+		fwrite(st, 4, n, audio);
+	}
+}
+
 static void frames(int keys, int n) {
 	core->setKeys(core, keys);
-	for (int i = 0; i < n; ++i) { core->runFrame(core); ++frame; }
+	for (int i = 0; i < n; ++i) { core->runFrame(core); ++frame; drain_audio(); }
 }
 
 static void wfile(const char* dir, const char* name, const void* p, size_t n) {
@@ -131,6 +150,16 @@ int main(int argc, char** argv) {
 			if (cmd[4] == '8') core->rawWrite8(core, addr, -1, val);
 			else core->rawWrite16(core, addr, -1, val);
 		}
+		else if (!strcmp(cmd, "audio")) {
+			char path[1024];
+			snprintf(path, sizeof(path), "%s/%s", outdir, a1);
+			core->setAudioBufferSize(core, 4096);
+			blip_set_rates(core->getAudioChannel(core, 0), core->frequency(core), 32768);
+			blip_set_rates(core->getAudioChannel(core, 1), core->frequency(core), 32768);
+			blip_clear(core->getAudioChannel(core, 0));
+			blip_clear(core->getAudioChannel(core, 1));
+			audio = fopen(path, "wb");
+		}
 		else if (!strcmp(cmd, "memdump")) {
 			struct GBA* gba = core->board;
 			char dir[1024];
@@ -141,6 +170,7 @@ int main(int argc, char** argv) {
 		}
 		else { fprintf(stderr, "bad command %s\n", cmd); return 2; }
 	}
+	if (audio) fclose(audio);
 	core->deinit(core);
 	return 0;
 }
