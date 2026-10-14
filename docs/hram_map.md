@@ -31,3 +31,14 @@ The native SM83 stack starts at `$D000`.
 ## Cycle measurement
 Timer at 262144 Hz (TAC=5, 1 tick = 4 M-cycles); the ISR counts TIMA overflows.
 Cost ≈ (TCNT·256 + TIMA)·4 M-cycles.
+
+## Phase 1.5 item 4: slot allocation per value group (`hram_alloc`, default on)
+With pruning enabled, the R0-R12 slots are no longer tied to one ARM register for the
+whole program: `tools/prune/regalloc.py` assigns each web (SSA values of one register
+joined by phi/pi) a 4-byte slot from liveness-based interference, and renames the IR
+accordingly. Webs fixed by the ABI or by multi-register instructions stay in their
+home slot (arguments, values live at returns, push/pop/ldm/stm/bl operands, SP, LR,
+PC, every web of a non-entry function), so the slots seen by callers are unchanged:
+R0 = result, R0-R3 = arguments, and under AAPCS R4-R11 are preserved. The coloring
+minimises new referenced bytes (byte width from the storage class), and the backend
+keeps the allocation only if it does not increase the referenced HRAM bytes.

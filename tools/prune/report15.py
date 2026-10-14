@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 from tools.backend.gba2gbc_core import build
+from tools.backend.hram_usage import hram_reg_bytes
 from tools.harness import RefARM, GB
 from tools.profile.seeds import seeds
 from tools.profile.range_tracer import trace_kernel
@@ -27,41 +28,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # (name, prune mode, opts) — cumulative; "phase1" is the Phase 1 B3 state
 CONFIGS = [
     ("phase0", None, None),
-    ("phase1", "sound", {"skip_lr": False, "frame_trim": False}),
-    ("+lr", "sound", {"skip_lr": True, "frame_trim": False}),
-    ("+frame", "sound", {"skip_lr": True, "frame_trim": True}),
-    ("+entry", "sound", {"skip_lr": True, "frame_trim": True, "entry_abi": "none"}),
+    ("phase1", "sound", {"skip_lr": False, "frame_trim": False, "hram_alloc": False}),
+    ("+lr", "sound", {"frame_trim": False, "hram_alloc": False}),
+    ("+frame", "sound", {"hram_alloc": False}),
+    ("default", "sound", {}),                       # + item 4 (HRAM allocation)
+    ("entry-noalloc", "sound", {"entry_abi": "none", "hram_alloc": False}),
+    ("entry", "sound", {"entry_abi": "none"}),
 ]
-REG_LO, REG_HI = 0xFF80, 0xFFC0
-
-
-def hram_reg_bytes(asm_path):
-    """Static count of register-area bytes ($FF80-$FFBF) the generated code reads or
-    writes: explicit `ldh [$FFxx]` operands plus `[hl]` walks after `ld hl, $FFxx`
-    (followed through inc l / dec l)."""
-    used, cur = set(), None
-    for line in open(asm_path):
-        t = line.split(";")[0].strip()
-        if not t:
-            if line.strip().endswith(":"):
-                cur = None
-            continue
-        m = re.match(r"ld hl, \$(FF[0-9A-F]{2})$", t)
-        if m:
-            cur = int(m.group(1), 16)
-            continue
-        if t in ("inc l",) and cur is not None:
-            cur += 1
-        elif t == "dec l" and cur is not None:
-            cur -= 1
-        elif t.startswith(("ld h,", "ld l,", "ld hl,", "call", "jp", "ret")) or "hl+" in t:
-            cur = None
-        if "[hl]" in t and cur is not None:
-            used.add(cur)
-        for m in re.finditer(r"\[\$(FF[0-9A-F]{2})\]", t):
-            used.add(int(m.group(1), 16))
-    used |= {0xFF80 + i for i in range(16)} | {0xFFB4 + i for i in range(4)}  # args + SP
-    return len({a for a in used if REG_LO <= a < REG_HI})
 
 
 def span(addrs, lo, hi):
@@ -97,7 +70,7 @@ def measure(kernel, nseeds, wseeds, configs):
         code = int(re.search(r'\(\$([0-9a-f]+) bytes\) \["kernel"\]', mp).group(1), 16)
         out[name] = {"mcycles": cyc / len(ss), "ok": ok, "seeds": len(ss), "wram": len(wram),
                      "wram_peak": span(wram, 0xD800, 0xE000) + span(wram, 0xC000, 0xD800),
-                     "hram": hram_reg_bytes(rom[:-4] + ".asm"), "code": code}
+                     "hram": hram_reg_bytes(open(rom[:-4] + ".asm").read()), "code": code}
     return out
 
 

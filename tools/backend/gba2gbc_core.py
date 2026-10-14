@@ -26,12 +26,27 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
     if prune:
         from tools.prune.bitwidth_pruning import build_plan
         from tools.backend.narrow import generate_narrow_asm
-        plan = build_plan(prog, profile, "profile" if prune == "profile" else "sound", opts)
-        if prune == "flags":
-            plan.mode = "flags-only"
-            plan.storage = {}
-            plan.fused, plan.deleted = {}, set()
-        asm, stats = generate_narrow_asm(plan)
+        from tools.backend.hram_usage import hram_reg_bytes
+        mode = "profile" if prune == "profile" else "sound"
+
+        def gen(o):
+            p = lift_file(src, entry)
+            plan = build_plan(p, profile, mode, o)
+            if prune == "flags":
+                plan.mode = "flags-only"
+                plan.storage = {}
+                plan.fused, plan.deleted = {}, set()
+            return (p, plan) + generate_narrow_asm(plan)
+        o = dict(opts or {})
+        prog, plan, asm, stats = gen(o)
+        if plan.opts["hram_alloc"] and plan.rename:
+            # item 4 is a heuristic: keep the allocation only if it does not increase
+            # the referenced HRAM bytes (ties: smaller code)
+            alt = gen({**o, "hram_alloc": False})
+            key = lambda a: (hram_reg_bytes(a), a.count("\n"))
+            if key(alt[2]) < key(asm):
+                prog, plan, asm, stats = alt
+                plan.rename_rejected = True
         prog.plan, prog.stats = plan, stats
     else:
         asm = generate_asm(prog)

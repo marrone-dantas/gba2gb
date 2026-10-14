@@ -196,7 +196,7 @@ def fuse_extensions(plan: Plan):
 
 
 # ---------------------------------------------------------------- driver
-DEFAULT_OPTS = {"skip_lr": True, "entry_abi": "aapcs", "frame_trim": True}
+DEFAULT_OPTS = {"skip_lr": True, "entry_abi": "aapcs", "frame_trim": True, "hram_alloc": True}
 
 
 def build_plan(elf_or_prog, profile=None, mode="sound", opts=None):
@@ -205,9 +205,15 @@ def build_plan(elf_or_prog, profile=None, mode="sound", opts=None):
     need not preserve callee-saved registers."""
     opts = {**DEFAULT_OPTS, **(opts or {})}
     prog = lift_file(elf_or_prog) if isinstance(elf_or_prog, str) else elf_or_prog
+    rename = {}
+    if opts["hram_alloc"]:  # item 4: renames the IR in place (tools/prune/regalloc.py)
+        from tools.prune.regalloc import allocate, translate_profile
+        rename = allocate(prog, opts["entry_abi"], opts["skip_lr"])
+        profile = translate_profile(profile, rename)
     ssa = ra.SSAProgram(prog)
     ra.analyze(ssa)
     plan = Plan(ssa=ssa, mode=mode, opts=opts)
+    plan.rename = rename
     if mode == "profile":
         if profile is None:
             raise ValueError("profile-guided mode needs a profile")
