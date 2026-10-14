@@ -6,3 +6,5 @@ pytest
 pyelftools
 numpy
 pillow
+torch  # CPU build is enough: pip install torch --index-url https://download.pytorch.org/whl/cpu
+scikit-image
