@@ -22,6 +22,7 @@ class Gen:
         self.p = prog
         self.out: list[str] = []
         self.hal = hal or {}  # addr -> access (tools/hal/intercept.py), Phase 2
+        self.stats = {}
 
     def e(self, *lines):
         self.out.extend("    " + l for l in lines)
@@ -214,7 +215,7 @@ class Gen:
             self.e("ret")
             return
         if op == "b":
-            self.e(f"jp L_{x.target:08X}")
+            self.e(f"jp {self.tgt(x.target)}")
             return
         if op == "bl":
             self.ldimm(R(14), (x.addr + 4) | 1)
@@ -222,7 +223,7 @@ class Gen:
             return
         if op == "bcc":
             self.cond(x.cond)
-            self.e("or a", f"jp nz, L_{x.target:08X}")
+            self.e("or a", f"jp nz, {self.tgt(x.target)}")
             return
         raise LiftError(f"backend: unsupported op {op} ({x.text})")
 
@@ -240,6 +241,28 @@ class Gen:
             for i in range(n, 4):
                 self.e(f"ldh [{h(rd + i)}], a")
 
+    def ew_hl(self, acc, src):
+        """Phase 5 A2: select the SRAM bank of an EWRAM access (unless the bank-switch
+        pass proved it current) and point hl at $A000 | (addr & $1FFF). src = HRAM
+        slot holding the ARM address, or None for a constant address."""
+        if acc["bank"] is None:
+            self.e("call HAL_EW_SETBANK")
+            self.stats["sram_dyn_bank"] = self.stats.get("sram_dyn_bank", 0) + 1
+        elif acc.get("switch", True):
+            self.e(f"ld a, {acc['bank']}", "ld [$4000], a")
+            self.stats["sram_switches"] = self.stats.get("sram_switches", 0) + 1
+        if src is None:
+            self.e(f"ld hl, ${0xA000 | (acc['const'] & 0x1FFF):04X}")
+        else:
+            self.e(f"ldh a, [{h(src + 1)}]", "and $1F", "or $A0", "ld h, a", f"ldh a, [{h(src)}]", "ld l, a")
+
+    def tgt(self, t):
+        """Branch label: back edges of a loop with a hoisted SRAM bank switch skip it."""
+        ho = getattr(self.hal, "hoist", {}) if self.hal else {}
+        if t in ho and getattr(self, "cur_block", None) in ho[t]["body"]:
+            return f"L_{t:08X}_in"
+        return f"L_{t:08X}"
+
     def hal_mem(self, x):
         acc = self.hal[x.addr]
         reg = acc["region"]
@@ -248,7 +271,14 @@ class Gen:
             for k, r in enumerate(x.regs):
                 self.ldimm(T2, 4 * k)
                 self.addsub("add", R(base), T2, T1, False)
-                if x.op == "stm" and reg == "dyn":
+                if reg == "ewram":
+                    self.ew_hl(acc, T1)
+                    if x.op == "stm":
+                        for i in range(4):
+                            self.e(f"ldh a, [{h(R(r) + i)}]", "ld [hl+], a")
+                    else:
+                        self.load_bytes(R(r), 4, False)
+                elif x.op == "stm" and reg == "dyn":
                     self.e(f"ld c, LOW({h(R(r))})", "ld e, 4", "call HAL_DYN_STORE")
                 elif x.op == "stm":   # VRAM
                     self.e(f"ld c, LOW({h(R(r))})", "call HAL_VRAM_STORE32")
@@ -297,11 +327,22 @@ class Gen:
                 self.e(f"ld hl, ${0xD100 + o:04X}")
                 self.load_bytes(rd, n, signed)
             return
-        if idx is None and disp == 0:
+        if reg == "ewram" and acc["const"] is not None:
+            self.ew_hl(acc, None)
+        elif idx is None and disp == 0:
             self.copy(T1, R(base))
         else:
             B = R(idx) if idx is not None else self.src(disp, T1)
             self.addsub("add", R(base), B, T1, False)
+        if reg == "ewram":
+            if acc["const"] is None:
+                self.ew_hl(acc, T1)
+            if st:
+                for i in range(n):
+                    self.e(f"ldh a, [{h(rd + i)}]", "ld [hl+], a" if i < n - 1 else "ld [hl], a")
+            else:
+                self.load_bytes(rd, n, signed)
+            return
         if reg == "rom":
             self.e(f"ldh a, [{h(T1 + 1)}]", "and $1F", "or $20", "ld h, a", f"ldh a, [{h(T1)}]", "ld l, a")
             self.load_bytes(rd, n, signed)
@@ -356,10 +397,18 @@ class Gen:
         o.append('SECTION "kernel", ROMX, BANK[1]')
         o.append("KernelEntry::")
         o.append(f"    jp L_{self.p.entry:08X}")
+        ho = getattr(self.hal, "hoist", {}) if self.hal else {}
         for x in self.p.ordered():
             if x.addr in self.p.leaders or x.addr in self.p.funcs:
+                if x.addr in ho and getattr(self, "cur_block", None) in ho[x.addr]["body"]:
+                    o.append(f"    jp L_{x.addr:08X}_in   ; in-loop fall-through skips the hoisted switch")
                 o.append(f"L_{x.addr:08X}:")
+                self.cur_block = x.addr
                 self.begin_block(x.addr)
+                if x.addr in ho:
+                    o.append(f"    ld a, {ho[x.addr]['bank']}   ; SRAM bank hoisted out of the loop")
+                    o.append("    ld [$4000], a")
+                    o.append(f"L_{x.addr:08X}_in:")
             o.append(f"    ; {x.addr:08X}: {x.text}")
             self.ins(x)
         return "\n".join(o) + "\n"

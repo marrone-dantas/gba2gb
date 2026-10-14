@@ -57,3 +57,5 @@ at most 40 kept (OAM order = priority).
   680 vblanks (~26 fps); the logical frame sequence still matches exactly.
 * SameBoy / mGBA were not available; the GBA side is a Unicorn reference (`tools/hal/gba_ref.py`)
   with simulated VCOUNT/KEYINPUT and a minimal renderer (no X wrap, all 128 objects).
+
+EWRAM (0x02000000) is mapped to MBC5 SRAM since Phase 5 A2 (docs/sram_paging.md).

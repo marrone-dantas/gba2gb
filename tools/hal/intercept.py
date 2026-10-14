@@ -29,7 +29,15 @@ from tools.prune import range_analysis as ra
 
 REGIONS = [("io", 0x04000000, 0x040003FF), ("pal", 0x05000000, 0x050003FF),
            ("vram", 0x06000000, 0x06017FFF), ("oam", 0x07000000, 0x070003FF),
-           ("rom", 0x08000000, 0x09FFFFFF), ("ram", 0x02000000, 0x03FFFFFF)]
+           ("rom", 0x08000000, 0x09FFFFFF), ("ewram", 0x02000000, 0x0201FFFF),
+           ("ram", 0x03000000, 0x03FFFFFF)]
+SRAM_BANK = 0x2000      # Phase 5 A2: EWRAM -> MBC5 SRAM, bank = (addr >> 13) & 15
+
+
+def ewram_bank(lo, hi):
+    """Compile-time SRAM bank of an EWRAM access range, or None if it spans banks."""
+    b0, b1 = (lo - 0x02000000) // SRAM_BANK, (hi - 0x02000000) // SRAM_BANK
+    return b0 if b0 == b1 else None
 WIDTH = {"": 4, "b": 1, "h": 2, "sb": 1, "sh": 2}
 SWIS = {5: "VBlankIntrWait"}
 IO_NAMES = {0x000: "DISPCNT", 0x004: "DISPSTAT", 0x006: "VCOUNT", 0x008: "BG0CNT",
@@ -147,11 +155,13 @@ def classify(ssa, strict=False):
             if iv and reg is None:
                 errors.append(f"{a:#010x}: {x.text}: address range {iv[0]:#x}-{iv[1]:#x} spans regions")
                 continue
-            if reg not in ("ram", "rom", "vram", "dyn") or (reg == "rom" and x.op == "stm") or \
+            if reg not in ("ram", "rom", "vram", "dyn", "ewram") or (reg == "rom" and x.op == "stm") or \
                     (reg == "vram" and x.op == "ldm"):
                 errors.append(f"{a:#010x}: {x.text}: {reg} block transfer not supported")
                 continue
             acc[a] = {"region": reg, "const": None, "width": 4, "store": x.op == "stm"}
+            if reg == "ewram":
+                acc[a]["bank"] = ewram_bank(iv[0], iv[1] + 4 * len(x.regs) - 1) if iv else None
             continue
         if x.mem is None:
             continue
@@ -169,6 +179,8 @@ def classify(ssa, strict=False):
             reg = unknown(a, x, env, base, idx, x.op.startswith("str"), n)
             if reg is not None:
                 acc[a] = {"region": reg, "const": None, "width": n, "store": x.op.startswith("str")}
+                if reg == "ewram":
+                    acc[a]["bank"] = None
             continue
         lo, hi = ib[0] + ii[0] + disp, ib[1] + ii[1] + disp + n - 1
         reg = region_of(lo, hi)
@@ -193,6 +205,8 @@ def classify(ssa, strict=False):
                 warnings.append(f"{a:#010x}: {x.text}: I/O register {off:#05x} "
                                 f"{'write ignored' if st else 'read returns 0'}")
         acc[a] = {"region": reg, "const": const, "width": n, "store": st}
+        if reg == "ewram":
+            acc[a]["bank"] = ewram_bank(lo, hi)
     if errors:
         raise InterceptError("unresolvable or unsupported accesses:\n  " + "\n  ".join(errors))
     return acc, warnings

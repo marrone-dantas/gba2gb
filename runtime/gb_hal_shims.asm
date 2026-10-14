@@ -936,11 +936,14 @@ SECTION "hal_dyn", ROM0
 ;   anything else -> wDynZero (reads as 0)
 HAL_DYN_ADDR::
     ldh a, [HR_T1 + 3]
-    and $FE
     cp $08
     jr z, .rom
-    cp $02
+    cp $09
+    jr z, .rom
+    cp $03
     jr z, .ram
+    cp $02
+    jr z, .ew
     ld hl, wDynZero
     xor a
     ld [hl+], a
@@ -950,6 +953,12 @@ HAL_DYN_ADDR::
     dec hl
     dec hl
     ret
+.ew:
+    call HAL_EW_SETBANK
+    ldh a, [HR_T1 + 1]
+    and $1F
+    or $A0
+    jr .lo
 .rom:
     ldh a, [HR_T1 + 1]
     and $1F
@@ -965,12 +974,30 @@ HAL_DYN_ADDR::
     ld l, a
     ret
 
+; Phase 5 A2: select the MBC5 SRAM bank of the EWRAM address T1:
+; bank = (addr >> 13) & 15 (bits 13-15 from T1+1, bit 16 from T1+2). Clobbers a, b.
+HAL_EW_SETBANK::
+    ldh a, [HR_T1 + 2]
+    and 1
+    add a, a
+    add a, a
+    add a, a
+    ld b, a
+    ldh a, [HR_T1 + 1]
+    swap a
+    rrca
+    and 7
+    or b
+    ld [$4000], a
+    ret
+
 ; Store e bytes (1/2/4) of the HRAM slot c to ARM address T1:
-;   RAM -> window, palette / VRAM (16/32-bit) -> HAL shims, anything else ignored.
+;   IWRAM / EWRAM (SRAM) -> window, palette / VRAM (16/32-bit) -> HAL shims,
+;   anything else ignored.
 HAL_DYN_STORE::
     ldh a, [HR_T1 + 3]
     cp $02
-    jr z, .ram
+    jr z, .ew
     cp $03
     jr z, .ram
     cp $05
@@ -978,10 +1005,17 @@ HAL_DYN_STORE::
     cp $06
     jr z, .vram
     ret
+.ew:
+    call HAL_EW_SETBANK
+    ldh a, [HR_T1 + 1]
+    and $1F
+    or $A0
+    jr .hl
 .ram:
     ldh a, [HR_T1 + 1]
     and $0F
     or $C0
+.hl:
     ld h, a
     ldh a, [HR_T1]
     ld l, a

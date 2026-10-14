@@ -9,11 +9,20 @@ from tools.hal.intercept import classify, bg0cnt, InterceptError
 ARM_IMAGE_MAX = 0x2000   # mapped at ROM0 $2000-$3FFF: $2000 | (addr & $1FFF)
 
 
+class AccMap(dict):
+    """Access classification {addr: Access} + .hoist (SRAM bank switches hoisted
+    to loop headers, tools/sram/bank_switch.py)."""
+    hoist = {}
+
+
 def analyze(ssa, strict=None):
     import os
     if strict is None:
         strict = os.environ.get("GBA2GB_STRICT_PTR", "") not in ("", "0")
     acc, warnings = classify(ssa, strict=strict)
+    from tools.sram.bank_switch import plan as bank_plan
+    acc = AccMap(acc)
+    acc.hoist, srep = bank_plan(ssa, acc, hoist=os.environ.get("GBA2GB_NO_HOIST", "") in ("", "0"))
     nobj = 0
     for a, d in acc.items():
         if d["region"] == "oam" and d["store"]:
@@ -23,7 +32,7 @@ def analyze(ssa, strict=None):
     cnt = bg0cnt(ssa, acc)
     oam_st = {a: d for a, d in acc.items() if d["region"] == "oam" and d["store"]}
     io_st = {a: d for a, d in acc.items() if d["region"] == "io" and d["store"]}
-    return acc, {"nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st, "io_stores": io_st}
+    return acc, {"sram": srep, "nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st, "io_stores": io_st}
 
 
 def classify_phase0(prog):
@@ -43,6 +52,9 @@ def hal_sections(elf_path, prog, info, affine=None):
         data = sec[".data"].data() if ".data" in sec else b""
         dvma = sec[".data"]["sh_addr"] if ".data" in sec else 0x03000000
         bss = (sec[".bss"]["sh_addr"], sec[".bss"]["sh_size"]) if ".bss" in sec else (0x03000000, 0)
+        ew = (sec[".ewram"]["sh_addr"], sec[".ewram"]["sh_size"]) if ".ewram" in sec else (0x02000000, 0)
+    if ew[1] and not (0x02000000 <= ew[0] and sum(ew) <= 0x02020000):
+        raise InterceptError(f"EWRAM data at {ew[0]:#x}+{ew[1]:#x} outside the 128 KiB mapped to MBC5 SRAM")
     for vma, size in ((dvma, len(data)), bss):
         if size and not (0x03000000 <= vma and vma + size <= 0x03000E00):
             raise InterceptError(f"data at {vma:#x}+{size:#x} outside the IWRAM area mapped to WRAM "
@@ -60,6 +72,14 @@ def hal_sections(elf_path, prog, info, affine=None):
     if bss[1]:
         L += [f"    ld hl, ${0xC000 | (bss[0] & 0xFFF):04X}", f"    ld bc, {bss[1]}", ".b:", "    xor a",
               "    ld [hl+], a", "    dec bc", "    ld a, b", "    or c", "    jr nz, .b"]
+    # Phase 5 A2: enable the MBC5 SRAM (EWRAM) and clear the banks in use
+    L += ["    ld a, $0A", "    ld [$0000], a"]
+    end = ew[0] - 0x02000000 + ew[1]
+    for b in range(0, (end + 0x1FFF) // 0x2000 if ew[1] else 0):
+        n = min(0x2000, end - b * 0x2000)
+        L += [f"    ld a, {b}", "    ld [$4000], a", "    ld hl, $A000", f"    ld bc, {n}",
+              f".e{b}:", "    xor a", "    ld [hl+], a", "    dec bc", "    ld a, b", "    or c", f"    jr nz, .e{b}"]
+    info["ewram"] = ew
     L += ["    ret", "GbaData:"] + db(data)
     L += [f"GbaObjCount:: db {info['nobj']}", f"GbaBgCbbHi:: db ${cbb * 0x40:02X}",
           f"GbaBgSbbHi:: db ${sbb * 8:02X}"]
