@@ -19,10 +19,14 @@ def run(cmd):
         raise RuntimeError(f"{' '.join(cmd)}\n{r.stdout}{r.stderr}")
 
 
-def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None):
+def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False):
     """prune: None (Phase 0), 'flags' (narrowed backend but all values 32-bit),
-    'sound' (proven ranges) or 'profile' (observed ranges + guards; needs profile)."""
+    'sound' (proven ranges) or 'profile' (observed ranges + guards; needs profile).
+    hal: Phase 2 program mode (entry `main`, GB HAL runtime, intercepted I/O)."""
     prog = lift_file(src, entry)
+    info = None
+    if hal:
+        from tools.hal import lower
     if prune:
         from tools.prune.bitwidth_pruning import build_plan
         from tools.backend.narrow import generate_narrow_asm
@@ -36,7 +40,9 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
                 plan.mode = "flags-only"
                 plan.storage = {}
                 plan.fused, plan.deleted = {}, set()
-            return (p, plan) + generate_narrow_asm(plan)
+            acc, inf = lower.analyze(plan.ssa) if hal else ({}, None)
+            plan.hal_info = inf
+            return (p, plan) + generate_narrow_asm(plan, acc)
         o = dict(opts or {})
         prog, plan, asm, stats = gen(o)
         if plan.opts["hram_alloc"] and plan.rename:
@@ -48,15 +54,29 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
                 prog, plan, asm, stats = alt
                 plan.rename_rejected = True
         prog.plan, prog.stats = plan, stats
+        info = plan.hal_info
     else:
-        asm = generate_asm(prog)
+        acc = {}
+        if hal:
+            acc, info = lower.classify_phase0(prog)
+        asm = generate_asm(prog, acc)
+    if hal:
+        asm += lower.hal_sections(src, prog, info)
+        prog.hal_info = info
     with tempfile.TemporaryDirectory() as td:
         k = asm_out or os.path.join(td, "kernel.asm")
         open(k, "w").write(asm)
         ko, ro = os.path.join(td, "kernel.o"), os.path.join(td, "runtime.o")
         run(["rgbasm", "-I", RUNTIME, "-o", ko, k])
-        run(["rgbasm", "-I", RUNTIME, "-o", ro, os.path.join(RUNTIME, "runtime.asm")])
-        run(["rgblink", "-o", out, "-m", out + ".map", ro, ko])
+        objs = [ro, ko]
+        if hal:
+            run(["rgbasm", "-DHAL", "-I", RUNTIME, "-o", ro, os.path.join(RUNTIME, "runtime.asm")])
+            ho = os.path.join(td, "hal.o")
+            run(["rgbasm", "-I", RUNTIME, "-o", ho, os.path.join(RUNTIME, "gb_hal_shims.asm")])
+            objs.append(ho)
+        else:
+            run(["rgbasm", "-I", RUNTIME, "-o", ro, os.path.join(RUNTIME, "runtime.asm")])
+        run(["rgblink", "-o", out, "-m", out + ".map", "-n", out[:-4] + ".sym", *objs])
         run(["rgbfix", "-v", "-p", "0xFF", "-m", "0x1B", "-r", "0x04", "-t", "GBA2GB", out])
     return prog
 
@@ -75,11 +95,14 @@ def main(argv=None):
                          "caller must treat r1-r12 and LR as clobbered. 'aapcs': full AAPCS "
                          "callee-saved preservation (docs/frame_layout.md)")
     ap.add_argument("--keep-lr", action="store_true", help="keep saving LR on the emulated stack")
+    ap.add_argument("--hal", action="store_true",
+                    help="Phase 2 program mode: GB HAL runtime, statically intercepted GBA I/O "
+                         "(use with --entry main; docs/hal.md)")
     a = ap.parse_args(argv)
     import json
     prof = json.load(open(a.profile)) if a.profile else None
     opts = {"entry_abi": a.entry_abi, "skip_lr": not a.keep_lr}
-    p = build(a.input, a.output, a.entry, a.asm, a.prune, prof, opts)
+    p = build(a.input, a.output, a.entry, a.asm, a.prune, prof, opts, hal=a.hal)
     print(f"{a.output}: {len(p.ins)} Thumb instructions translated")
 
 

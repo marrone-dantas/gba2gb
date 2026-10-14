@@ -23,6 +23,8 @@ def defs(x: Ins):
         return [x.rd] if x.wb else []
     if op == "bl":
         return list(CALL_CLOBBER)
+    if op == "swi":
+        return [0, 1, 2, 3]  # BIOS calls clobber r0-r3
     return [x.rd] if x.rd is not None else []
 
 

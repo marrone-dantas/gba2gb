@@ -22,8 +22,8 @@ NARROW_ALU = ("add", "sub", "and", "orr", "eor", "bic")
 
 
 class NarrowGen(Gen):
-    def __init__(self, plan):
-        super().__init__(plan.ssa.prog)
+    def __init__(self, plan, hal=None):
+        super().__init__(plan.ssa.prog, hal)
         self.plan = plan
         self.ssa = plan.ssa
         self.live = live_out(plan.ssa)
@@ -432,6 +432,13 @@ class NarrowGen(Gen):
         self.stats["narrow_ops"] += 1
 
     def mem(self, x, w, ext):
+        if x.addr in self.hal and self.hal[x.addr]["region"] != "ram":
+            self.ensure_all(x, 4)
+            self.hal_mem(x)
+            if not x.op.startswith("str"):
+                self.defined(x, x.rd, 4)
+            self.stats["fallback_ops"] += 1
+            return
         base, idx, disp = x.mem
         self.ensure(x, base, 2)
         if idx is None and disp == 0:
@@ -465,7 +472,7 @@ class NarrowGen(Gen):
         self.stats["narrow_ops"] += 1
 
 
-def generate_narrow_asm(plan):
-    g = NarrowGen(plan)
+def generate_narrow_asm(plan, hal=None):
+    g = NarrowGen(plan, hal)
     asm = g.generate().replace("(Phase 0)", f"(Phase 1, {plan.mode} pruning)")
     return asm, g.stats

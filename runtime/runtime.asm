@@ -9,6 +9,7 @@ DEF rTAC  EQU $FF07
 DEF rIF   EQU $FF0F
 DEF rIE   EQU $FFFF
 
+IF !DEF(HAL)  ; kernel harness (lockstep); the demo runtime is gb_hal_shims.asm
 SECTION "vec_timer", ROM0[$50]
     jp TimerISR
 
@@ -49,6 +50,10 @@ Start:
     ldh [HR_DONE], a     ; end marker
     jr .wait
 
+ELSE
+SECTION "runtime", ROM0
+ENDC
+
 ; GuardTrap: debug handler for failed profile-guided range guards.
 ; a = guard id. Records it, marks DONE = 2 and stops.
 GuardTrap::
@@ -59,6 +64,7 @@ GuardTrap::
 .halt:
     jr .halt
 
+IF !DEF(HAL)
 TimerISR:
     push af
     ldh a, [HR_TCNT]
@@ -70,6 +76,7 @@ TimerISR:
     ldh [HR_TCNT+1], a
 .s: pop af
     reti
+ENDC
 
 ; ---- flags -------------------------------------------------------------
 ; NZ_T0: N = bit31(T0), Z = (T0 == 0)

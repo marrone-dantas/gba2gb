@@ -126,6 +126,9 @@ def convert(md, img: Image, i) -> Ins:
         return ins
     if mn == "nop":
         return ins
+    if mn in ("svc", "swi"):  # BIOS call: handled by the GB HAL (tools/hal/intercept.py)
+        ins.op, ins.a = "swi", ops[0][1]
+        return ins
     if mn in ("ldr", "ldrb", "ldrh", "ldrsb", "ldrsh", "str", "strb", "strh"):
         rd, m = ops[0][1], ops[1][1]
         if mn == "ldr" and m[0] == 15:

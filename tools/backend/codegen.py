@@ -18,9 +18,10 @@ def h(x):
 
 
 class Gen:
-    def __init__(self, prog: Program):
+    def __init__(self, prog: Program, hal=None):
         self.p = prog
         self.out: list[str] = []
+        self.hal = hal or {}  # addr -> access (tools/hal/intercept.py), Phase 2
 
     def e(self, *lines):
         self.out.extend("    " + l for l in lines)
@@ -157,6 +158,11 @@ class Gen:
             self.nz_t0()
             self.copy(rd, T0)
             return
+        if op == "swi":
+            self.e("call HAL_VBLANKINTRWAIT")  # the only BIOS call accepted by the interceptor
+            return
+        if x.addr in self.hal and self.hal[x.addr]["region"] != "ram":
+            return self.hal_mem(x)
         if op in ("ldr", "ldrb", "ldrh", "ldrsb", "ldrsh", "str", "strb", "strh"):
             base, idx, disp = x.mem
             if idx is None and disp == 0:
@@ -220,6 +226,78 @@ class Gen:
             return
         raise LiftError(f"backend: unsupported op {op} ({x.text})")
 
+    # ---- Phase 2: statically intercepted accesses (tools/hal/intercept.py) ----
+    IO_WR = {0x000: "DISPCNT", 0x010: "BG0HOFS", 0x012: "BG0VOFS"}
+    IO_RD = {0x006: "VCOUNT", 0x130: "KEYINPUT"}
+
+    def load_bytes(self, rd, n, signed):
+        """Load n bytes from [hl] into the slot rd, extended to 32 bits."""
+        for i in range(n):
+            self.e("ld a, [hl+]" if i < n - 1 else "ld a, [hl]", f"ldh [{h(rd + i)}], a")
+        if n < 4:
+            self.e("rlca", "sbc a, a") if signed else self.e("xor a")
+            for i in range(n, 4):
+                self.e(f"ldh [{h(rd + i)}], a")
+
+    def hal_mem(self, x):
+        acc = self.hal[x.addr]
+        reg = acc["region"]
+        if x.op in ("ldm", "stm"):
+            base = x.rd
+            for k, r in enumerate(x.regs):
+                self.ldimm(T2, 4 * k)
+                self.addsub("add", R(base), T2, T1, False)
+                if x.op == "stm":   # VRAM
+                    self.e(f"ld c, LOW({h(R(r))})", "call HAL_VRAM_STORE32")
+                else:               # ROM
+                    self.e(f"ldh a, [{h(T1 + 1)}]", "and $1F", "or $20", "ld h, a",
+                           f"ldh a, [{h(T1)}]", "ld l, a")
+                    self.load_bytes(R(r), 4, False)
+            if x.wb and not (x.op == "ldm" and x.rd in x.regs):
+                self.ldimm(T2, 4 * len(x.regs))
+                self.addsub("add", R(base), T2, R(base), False)
+            return
+        base, idx, disp = x.mem
+        n = acc["width"]
+        rd = R(x.rd)
+        st = acc["store"]
+        signed = x.op in ("ldrsb", "ldrsh")
+        if reg == "io":
+            off = acc["const"] - 0x04000000
+            name = (self.IO_WR if st else self.IO_RD).get(off)
+            if name and st:
+                self.e(f"ld c, LOW({h(rd)})", f"call HAL_WR_{name}")
+            elif name:
+                self.e(f"ld c, LOW({h(rd)})", f"call HAL_{name}")
+            elif st:
+                self.e(f"; I/O write to {off:#05x} ignored (HAL owns it)")
+            else:
+                self.ldimm(rd, 0)
+            return
+        if reg == "oam":
+            o = acc["const"] - 0x07000000
+            if o + n > 256:
+                raise LiftError(f"OAM access {acc['const']:#x} at {x.addr:#x}: the GBA OAM mirror holds objects 0-31")
+            if st:
+                for i in range(n):
+                    self.e(f"ldh a, [{h(rd + i)}]", f"ld [${0xD100 + o + i:04X}], a")
+            else:
+                self.e(f"ld hl, ${0xD100 + o:04X}")
+                self.load_bytes(rd, n, signed)
+            return
+        if idx is None and disp == 0:
+            self.copy(T1, R(base))
+        else:
+            B = R(idx) if idx is not None else self.src(disp, T1)
+            self.addsub("add", R(base), B, T1, False)
+        if reg == "rom":
+            self.e(f"ldh a, [{h(T1 + 1)}]", "and $1F", "or $20", "ld h, a", f"ldh a, [{h(T1)}]", "ld l, a")
+            self.load_bytes(rd, n, signed)
+            return
+        if n == 1:
+            raise LiftError(f"8-bit store to {reg.upper()} at {x.addr:#x} is not supported")
+        self.e(f"ld c, LOW({h(rd)})", f"call HAL_{reg.upper()}_STORE{8 * n}")
+
     def cond(self, c):
         """Leave the boolean value (0/1) of the ARM condition in a."""
         e = self.e
@@ -266,5 +344,5 @@ class Gen:
         return "\n".join(o) + "\n"
 
 
-def generate_asm(prog: Program) -> str:
-    return Gen(prog).generate()
+def generate_asm(prog: Program, hal=None) -> str:
+    return Gen(prog, hal).generate()
