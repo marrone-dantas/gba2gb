@@ -342,6 +342,9 @@ HAL_WR_DMA1CNT_H::
     jr SfxUpdate
 
 HAL_WR_TM0CNT_H::
+    push bc
+    call HAL_WR_TM0CNT_TIMER      ; the clock (gb_timer_shims.asm)
+    pop bc
     ldh a, [c]
     and $80
     ld [wTmOn], a

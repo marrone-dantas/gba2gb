@@ -4,7 +4,7 @@ import subprocess
 from tools.backend.gba2gbc_core import build
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEMOS = ["obj_demo", "key_demo", "brin_demo", "oam_stress", "input_test", "affine_demo", "sound_demo", "spill_demo", "ewram_demo"]
+DEMOS = ["obj_demo", "key_demo", "brin_demo", "oam_stress", "input_test", "affine_demo", "sound_demo", "spill_demo", "ewram_demo", "timer_demo"]
 
 
 def make():

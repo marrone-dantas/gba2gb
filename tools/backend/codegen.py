@@ -217,6 +217,9 @@ class Gen:
         if op == "b":
             self.e(f"jp {self.tgt(x.target)}")
             return
+        if op == "bl" and x.native:
+            self.e(f"call NAT_{x.native}")      # Phase 5 B2: native helper (runtime/gb_softfloat.asm)
+            return
         if op == "bl":
             self.ldimm(R(14), (x.addr + 4) | 1)
             self.e(f"call L_{x.target:08X}")
@@ -229,8 +232,9 @@ class Gen:
 
     # ---- Phase 2: statically intercepted accesses (tools/hal/intercept.py) ----
     IO_WR = {0x000: "DISPCNT", 0x010: "BG0HOFS", 0x012: "BG0VOFS",
-             0x0BC: "DMA1SAD", 0x0C6: "DMA1CNT_H", 0x102: "TM0CNT_H"}
-    IO_RD = {0x006: "VCOUNT", 0x130: "KEYINPUT"}
+             0x0BC: "DMA1SAD", 0x0C6: "DMA1CNT_H", 0x100: "TM0D", 0x102: "TM0CNT_H",
+             0x104: "TM1D", 0x106: "TM1CNT_H"}
+    IO_RD = {0x006: "VCOUNT", 0x100: "TM0D", 0x104: "TM1D", 0x130: "KEYINPUT"}
 
     def load_bytes(self, rd, n, signed):
         """Load n bytes from [hl] into the slot rd, extended to 32 bits."""

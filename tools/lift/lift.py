@@ -5,6 +5,7 @@ Decoding is recursive from the entry points (FUNC symbols and BL targets),
 which avoids decoding literal pools as code. PC-relative loads
 (`ldr rX, [pc, #imm]`) are statically resolved to constants (``mov`` op)."""
 from __future__ import annotations
+import re
 import struct
 from dataclasses import dataclass, field
 import capstone as cs
@@ -41,6 +42,7 @@ class Ins:
     cond: str | None = None
     target: int | None = None
     lit: int | None = None
+    native: str | None = None     # Phase 5 B2: BL to a native SM83 helper
 
     @property
     def is_term(self):
@@ -176,15 +178,38 @@ def convert(md, img: Image, i) -> Ins:
     return ins
 
 
+# Phase 5 B2: library helpers replaced by native SM83 routines (runtime/gb_softfloat.asm).
+# A BL to one of these (directly, or through the linker's Thumb->ARM veneer
+# `____<name>_from_thumb`) becomes `call NAT_<short>`; the helper body is not lifted.
+NATIVES = {"__aeabi_dadd": "dadd", "__aeabi_dsub": "dsub", "__aeabi_dmul": "dmul",
+           "__aeabi_i2d": "i2d", "__aeabi_f2d": "f2d", "__aeabi_d2f": "d2f",
+           "__aeabi_f2iz": "f2iz", "__aeabi_i2f": "i2f", "__aeabi_fmul": "fmul",
+           "__aeabi_fadd": "fadd", "__aeabi_fsub": "fsub", "__aeabi_fcmpeq": "fcmpeq",
+           "__aeabi_fcmplt": "fcmplt", "__aeabi_fcmpgt": "fcmpgt", "__aeabi_idiv": "idiv",
+           "__aeabi_idivmod": "idivmod", "__aeabi_lmul": "lmul"}
+
+
+def native_targets(entries):
+    """{address: short name} of the BL targets implemented natively."""
+    out = {}
+    for name, addr in entries.items():
+        m = re.fullmatch(r"____(\w+)_from_thumb", name)
+        base = "__" + m.group(1) if m else name
+        if base in NATIVES:
+            out[addr] = NATIVES[base]
+    return out
+
+
 class Program:
     """Lifting result: instructions by address, functions and CFG."""
 
-    def __init__(self, img: Image, entry="f"):
+    def __init__(self, img: Image, entry="f", natives=True):
         self.img = img
         self.md = cs.Cs(cs.CS_ARCH_ARM, cs.CS_MODE_THUMB)
         self.md.detail = True
         self.ins: dict[int, Ins] = {}
         self.entry = img.entries[entry]
+        self.natives = native_targets(img.entries) if natives else {}
         self.funcs = {self.entry}
         self.cfg = nx.DiGraph()
         self._decode()
@@ -206,7 +231,9 @@ class Program:
             while a not in self.ins:
                 x = self._decode_one(a)
                 self.ins[a] = x
-                if x.op == "bl":
+                if x.op == "bl" and x.target in self.natives:
+                    x.native = self.natives[x.target]
+                elif x.op == "bl":
                     self.funcs.add(x.target)
                     work.append(x.target)
                 if x.op in ("b", "bcc"):
@@ -243,9 +270,9 @@ class Program:
         return [self.ins[a] for a in sorted(self.ins)]
 
 
-def lift_file(path, entry="f"):
+def lift_file(path, entry="f", natives=True):
     img = Image.from_elf(path) if open(path, "rb").read(4) == b"\x7fELF" else Image.from_bin(path)
-    return Program(img, entry)
+    return Program(img, entry, natives)
 
 
 if __name__ == "__main__":

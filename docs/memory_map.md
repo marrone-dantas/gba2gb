@@ -7,7 +7,8 @@
 | `$D000-$D09F` | shadow OAM (40 x 4 bytes, page-aligned: OAM DMA source page `$D0`) |
 | `$D100-$D1FF` | HAL: GBA OAM mirror (32 objects x 8 bytes) |
 | `$D200-$D2FF` | HAL state (input byte, latched scroll, flags, counters) |
-| `$D300-$DFFF` | native SM83 stack (initial SP `$E000`, grows downward) |
+| `$D300-$D33F` | soft-float scratch (`runtime/gb_softfloat.asm`) |
+| `$D340-$DFFF` | native SM83 stack (initial SP `$E000`, grows downward) |
 
 Before Phase 2 the ARM window was `$C000 | (addr & $1FFF)` (all of WRAM) with the
 native stack starting at `$D000`, i.e. inside the window; a shadow OAM could not be

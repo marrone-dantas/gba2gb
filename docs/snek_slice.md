@@ -24,3 +24,14 @@ Game facts that matter for the port:
   76 objects (head, 64 body slots, frog, 10 score digits);
 * BG0 (playfield, SBB 1) plus BG1 overlays (SBB 2 "SNEK", SBB 3 "DEAD") selected by
   BG1CNT priority.
+
+## B2: native helpers and timers
+
+Soft-float / integer helpers used by Snek (`dadd`, `dmul`, `f2iz`, `idiv`,
+`lmul`, …) are replaced by SM83 natives in `runtime/gb_softfloat.asm` (lifter
+`NATIVES`, codegen `call NAT_*`). Lockstep against the real libgcc:
+`tests/test_softfloat.py` (see `docs/softfloat.md`).
+
+GBA timers 0 and 1 (`TM0D`/`TM1D`/`TMxCNT`) are emulated by
+`runtime/gb_timer_shims.asm` from the GB TIMA clock (resolution 1/16384 s).
+Covered by `tests/test_timer.py`.

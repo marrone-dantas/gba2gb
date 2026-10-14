@@ -140,6 +140,7 @@ HalStart:
     ld a, $03
     ldh [HR_SP + 3], a
     call GbaDataInit
+    call TimerInit                ; GBA timers 0/1 (gb_timer_shims.asm)
     ld a, 1
     ld [wNeedCompose], a          ; the first vsync shows the initial OAM
     ldh [rIE], a                  ; VBlank interrupt only
@@ -180,6 +181,7 @@ VBlankISR:
     xor a
     ld [wDmaReady], a
 .nodma:
+    call TmSync                   ; extend the 4096 Hz TIMA clock
     call AffStream                ; Phase 4.1 frame streaming (stub: ret)
     ld a, [wScx]
     ldh [rSCX], a
@@ -925,6 +927,7 @@ BgpFlat: db $00, $55, $AA, $FF   ; BG0 off: everything = L0
 
 INCLUDE "hal_luts.inc"
 INCLUDE "gb_audio_shims.asm"
+INCLUDE "gb_timer_shims.asm"
 
 ; ---------------------------------------------------------------------------
 ; Phase 5 A1: run-time address-space dispatch for pointers whose provenance is
