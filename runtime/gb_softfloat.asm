@@ -29,6 +29,92 @@ NAT_i2d::
     ld hl, NAT_i2d_impl
     jp FarCall
 NAT_i2f::
+    ; Phase P1: ROM0 fast path for |i| < 2^24 (exact, no rounding needed)
+    ldh a, [HR_R0 + 3]
+    ld b, a                       ; sign
+    bit 7, a
+    jr z, .p
+    ; |i| = -i
+    ldh a, [HR_R0]
+    cpl
+    add a, 1
+    ld c, a
+    ldh a, [HR_R0 + 1]
+    cpl
+    adc a, 0
+    ld d, a
+    ldh a, [HR_R0 + 2]
+    cpl
+    adc a, 0
+    ld e, a
+    ldh a, [HR_R0 + 3]
+    cpl
+    adc a, 0
+    jr nz, .far
+    jr .m
+.p:
+    or a
+    jr nz, .far
+    ldh a, [HR_R0]
+    ld c, a
+    ldh a, [HR_R0 + 1]
+    ld d, a
+    ldh a, [HR_R0 + 2]
+    ld e, a
+.m:                               ; e:d:c = |i| < 2^24
+    ld a, e
+    or d
+    or c
+    jr z, .z
+    ld h, 150                     ; exponent of e:d:c with the leading 1 at bit 23
+.bs:
+    ld a, e
+    or a
+    jr nz, .bb
+    ld e, d
+    ld d, c
+    ld c, 0
+    ld a, h
+    sub 8
+    ld h, a
+    jr .bs
+.bb:
+    bit 7, e
+    jr nz, .pk
+    sla c
+    rl d
+    rl e
+    dec h
+    jr .bb
+.pk:
+    ld a, c
+    ldh [HR_R0], a
+    ld a, d
+    ldh [HR_R0 + 1], a
+    ld a, h
+    rrca                          ; exponent bit 0 -> bit 7
+    and $80
+    ld l, a
+    ld a, e
+    and $7F
+    or l
+    ldh [HR_R0 + 2], a
+    ld a, h
+    srl a
+    ld l, a
+    ld a, b
+    and $80
+    or l
+    ldh [HR_R0 + 3], a
+    ret
+.z:
+    xor a
+    ldh [HR_R0], a
+    ldh [HR_R0 + 1], a
+    ldh [HR_R0 + 2], a
+    ldh [HR_R0 + 3], a
+    ret
+.far:
     ld a, BANK(NAT_i2f_impl)
     ld hl, NAT_i2f_impl
     jp FarCall
@@ -41,21 +127,212 @@ NAT_d2f::
     ld hl, NAT_d2f_impl
     jp FarCall
 NAT_f2iz::
+    ; Phase P1: ROM0 fast path for 1 <= |x| < 256 and |x| < 1 (no bank switch);
+    ; everything else goes to the banked routine (exact)
+    ldh a, [HR_R0 + 3]
+    add a, a
+    ld b, a
+    ldh a, [HR_R0 + 2]
+    rlca
+    and 1
+    or b                          ; biased exponent
+    cp 127
+    jr c, .zero
+    cp 135
+    jr nc, .far                   ; |x| >= 256
+    ld b, a
+    ld a, 150 - 16
+    sub b                         ; shift - 16 (0..7)
+    ld b, a
+    ldh a, [HR_R0 + 2]
+    or $80
+    inc b
+    jr .t
+.l:
+    srl a
+.t:
+    dec b
+    jr nz, .l
+    ld b, a                       ; |result| (8 bits)
+    ldh a, [HR_R0 + 3]
+    bit 7, a
+    jr z, .pos
+    xor a
+    sub b
+    ldh [HR_R0], a
+    ld a, $FF
+    ldh [HR_R0 + 1], a
+    ldh [HR_R0 + 2], a
+    ldh [HR_R0 + 3], a
+    ret
+.pos:
+    ld a, b
+    ldh [HR_R0], a
+    xor a
+    ldh [HR_R0 + 1], a
+    ldh [HR_R0 + 2], a
+    ldh [HR_R0 + 3], a
+    ret
+.zero:
+    xor a
+    ldh [HR_R0], a
+    ldh [HR_R0 + 1], a
+    ldh [HR_R0 + 2], a
+    ldh [HR_R0 + 3], a
+    ret
+.far:
     ld a, BANK(NAT_f2iz_impl)
     ld hl, NAT_f2iz_impl
     jp FarCall
+; Phase P1: float compares entirely in ROM0 (exact, no unpacking): NaN -> 2,
+; +0 == -0, otherwise IEEE order via the sign-magnitude -> unsigned key mapping.
 NAT_fcmpeq::
-    ld a, BANK(NAT_fcmpeq_impl)
-    ld hl, NAT_fcmpeq_impl
-    jp FarCall
+    call FCmpFast
+    or a
+    jr SetR0BoolF
 NAT_fcmplt::
-    ld a, BANK(NAT_fcmplt_impl)
-    ld hl, NAT_fcmplt_impl
-    jp FarCall
+    call FCmpFast
+    cp -1
+    jr SetR0BoolF
 NAT_fcmpgt::
-    ld a, BANK(NAT_fcmpgt_impl)
-    ld hl, NAT_fcmpgt_impl
-    jp FarCall
+    call FCmpFast
+    cp 1
+SetR0BoolF:                       ; R0 = (z ? 1 : 0)
+    ld a, 0
+    jr nz, .s
+    inc a
+.s:
+    ldh [HR_R0], a
+    xor a
+    ldh [HR_R0 + 1], a
+    ldh [HR_R0 + 2], a
+    ldh [HR_R0 + 3], a
+    ret
+
+; c if the float at HRAM slot c is a NaN (exponent 255, mantissa != 0). Keeps c.
+IsNanFast:
+    inc c
+    inc c
+    ldh a, [c]                    ; byte 2
+    ld b, a
+    inc c
+    ldh a, [c]                    ; byte 3
+    dec c
+    dec c
+    dec c
+    add a, a
+    ld d, a
+    ld a, b
+    rlca
+    and 1
+    or d
+    inc a
+    jr nz, .no                    ; exponent != 255
+    ld a, b
+    and $7F
+    ld d, a
+    ldh a, [c]
+    or d
+    inc c
+    ld d, a
+    ldh a, [c]
+    dec c
+    or d
+    jr z, .no                     ; infinity
+    scf
+    ret
+.no:
+    and a
+    ret
+
+; a = -1 (R0 < R1), 0 (equal), 1 (R0 > R1), 2 (unordered)
+FCmpFast:
+    ld c, LOW(HR_R0)
+    call IsNanFast
+    jr c, .un
+    ld c, LOW(HR_R1)
+    call IsNanFast
+    jr c, .un
+    ldh a, [HR_R0 + 3]            ; both zero (any sign)?
+    ld b, a
+    ldh a, [HR_R1 + 3]
+    or b
+    and $7F
+    ld b, a
+    ldh a, [HR_R0 + 2]
+    or b
+    ld b, a
+    ldh a, [HR_R1 + 2]
+    or b
+    ld b, a
+    ldh a, [HR_R0 + 1]
+    or b
+    ld b, a
+    ldh a, [HR_R1 + 1]
+    or b
+    ld b, a
+    ldh a, [HR_R0]
+    or b
+    ld b, a
+    ldh a, [HR_R1]
+    or b
+    ret z                         ; a = 0: equal
+    ; keys: negative -> ~bits, positive -> bits | $80000000; compare high to low
+    ldh a, [HR_R0 + 3]
+    rlca
+    sbc a, a
+    ld d, a                       ; d = $FF if R0 negative
+    ldh a, [HR_R1 + 3]
+    rlca
+    sbc a, a
+    ld e, a
+    ld c, 3
+.byte:
+    ld a, c
+    add a, LOW(HR_R0)
+    ld l, a
+    ld h, $FF
+    ld a, [hl]
+    xor d
+    ld b, a                       ; key byte of R0 (sign bit fixed below)
+    ld a, c
+    add a, LOW(HR_R1)
+    ld l, a
+    ld a, [hl]
+    xor e
+    ld l, a                       ; key byte of R1
+    ld a, c
+    cp 3
+    jr nz, .cmp
+    ld a, d                       ; positive: set the key's top bit
+    cpl
+    and $80
+    xor b
+    ld b, a
+    ld a, e
+    cpl
+    and $80
+    xor l
+    ld l, a
+.cmp:
+    ld a, b
+    cp l
+    jr c, .lt
+    jr nz, .gt
+    dec c
+    bit 7, c
+    jr z, .byte
+    xor a
+    ret
+.lt:
+    ld a, -1
+    ret
+.gt:
+    ld a, 1
+    ret
+.un:
+    ld a, 2
+    ret
 NAT_idiv::
     ld a, BANK(NAT_idiv_impl)
     ld hl, NAT_idiv_impl
