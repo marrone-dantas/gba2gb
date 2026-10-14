@@ -55,10 +55,15 @@ def main(argv=None):
     ap.add_argument("--prune", choices=["flags", "sound", "profile"],
                     help="Phase 1 bit-width pruning mode (default: Phase 0 code)")
     ap.add_argument("--profile", help="range profile JSON (required for --prune profile)")
+    ap.add_argument("--entry-abi", choices=["aapcs", "none"], default="aapcs",
+                    help="'none' (opt-in): the entry function does not preserve r4-r11; the "
+                         "caller must treat r1-r12 and LR as clobbered (docs/frame_layout.md)")
+    ap.add_argument("--keep-lr", action="store_true", help="keep saving LR on the emulated stack")
     a = ap.parse_args(argv)
     import json
     prof = json.load(open(a.profile)) if a.profile else None
-    p = build(a.input, a.output, a.entry, a.asm, a.prune, prof)
+    opts = {"entry_abi": a.entry_abi, "skip_lr": not a.keep_lr}
+    p = build(a.input, a.output, a.entry, a.asm, a.prune, prof, opts)
     print(f"{a.output}: {len(p.ins)} Thumb instructions translated")
 
 
