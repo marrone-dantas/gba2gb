@@ -126,3 +126,47 @@ Because Snek scales movement by the measured timer delta, game speed in
 wall-clock time is preserved; only the display update rate (~5 Hz) is low.
 Next steps: compile-time OAM resolution for the body array (avoid HAL_DYN_*),
 incremental compose (only objects stored since the last compose).
+
+## B5: flashcart and real-hardware checklist
+
+Not yet run on hardware; everything above is PyBoy (DMG mode) plus Unicorn. The
+ROM `build/snek/snek_dmg.gb` is 64 KiB, header: CGB flag $00 (DMG only), cartridge
+type $1B (MBC5 + RAM + battery), ROM size $01 (64 KiB, 4 banks), RAM size $04
+(128 KiB SRAM, used as GBA EWRAM pages), title `GBA2GB`, checksums from `rgbfix -v`.
+
+Before flashing
+- [ ] `rgbfix -v` reports no header/global checksum errors; the boot ROM checks the
+      Nintendo logo and header checksum and locks up otherwise.
+- [ ] Re-run `pytest` and `python -m tools.slice.snek_bot 3600` on the exact ROM file.
+- [ ] Cross-check in a second accurate emulator (SameBoy or Gambatte; mGBA in GB
+      mode): VRAM/OAM access timing and the STAT/LY edge cases are looser in PyBoy.
+- [ ] Run once with uninitialised RAM randomised (SameBoy option): the runtime clears
+      VRAM, $D000-$D7FF and the HAL state, but any read-before-write elsewhere
+      (WRAM0 ARM window, SRAM) would show up here.
+
+Flashcart (EverDrive GB X-series, EZ-Flash Junior, or a GBxCart-flashed MBC5 repro)
+- [ ] The cart/loader supports MBC5 with 128 KiB SRAM (type $1B, RAM $04). Some
+      cheap repro carts only have 32 KiB SRAM: EWRAM pages 4-15 would alias.
+- [ ] Start with a blank or erased save file (the SRAM is battery-backed; stale data
+      is not a problem for Snek because it clears its state, but note it for others).
+- [ ] Turn off the loader's in-game menu/"save state" hooks for the first test (they
+      patch vectors and can use HRAM/the stack).
+- [ ] On EverDrive, confirm it reports "MBC5" when the ROM is loaded.
+
+On DMG / Pocket / GBC / GBA (in GB mode)
+- [ ] Title screen appears; START enters the game; D-pad steers; DEAD screen on wall
+      or body hit; START restarts (matches PyBoy).
+- [ ] No sprite corruption at the top of the screen (OAM DMA runs from HRAM in VBlank;
+      a tear would mean the compose overran VBlank).
+- [ ] With more than 10 objects on one line, flicker instead of disappearing
+      (40-sprite rotation; the DMG's 10-per-line limit is not handled by the composer).
+- [ ] Leave it running 10+ minutes (the bot ran 36,000 frames): no lockup, which
+      would point to the bank shadow, stack ($D800-$DFFF) or the timer ISR.
+- [ ] GBC/GBA: the ROM is DMG-only (CGB flag $00) and runs in DMG compatibility
+      mode with the boot-ROM palette; this is expected.
+- [ ] Measure the update rate with a camera or the frame counter: expect ~5 Hz
+      display updates during movement (B4 lag numbers), with correct game speed.
+- [ ] Power-cycle with the cart already flashed to rule out a dependence on the
+      flashcart menu's leftover register state (LCDC, IE, SP, MBC bank).
+
+Record per device: model, cart, result per line, photos for docs/img/.
