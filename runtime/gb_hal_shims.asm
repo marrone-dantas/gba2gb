@@ -598,6 +598,32 @@ CObj:
     and $03
     cp $02
     ret z                         ; hidden
+    ld a, [GbaView]
+    or a
+    jr z, .vis
+    ; camera mode: reject objects whose tile is >= 256 or never had an opaque
+    ; pixel before the camera transform (Snek clears OAM to zero: most live
+    ; objects are tile 0 and used to cost ~1200 T-cycles each per compose)
+    push hl
+    push de
+    inc hl
+    inc hl
+    ld a, [hl+]                   ; attr2 low: tile
+    ld e, a
+    ld a, [hl]
+    and $03
+    ld a, 0                       ; (flags kept) tile >= 256: reject
+    jr nz, .rej
+    ld d, a
+    ld hl, wTileNZ
+    add hl, de
+    ld a, [hl]
+.rej:
+    pop de
+    pop hl
+    or a
+    ret z
+.vis:
     ld a, b
     and $01
     ld [wAff], a                  ; affine object (double-size is rejected at bake time)
@@ -1788,6 +1814,7 @@ HAL_DYN_STORE::
     jr z, .oam
     ret
 .oam:
+    push bc                       ; c = source HRAM slot (used by .cp below)
     push de                       ; e = byte count
     ldh a, [HR_T1 + 1]            ; object = (addr & $3FF) >> 3; extend wObjMax
     and 3
@@ -1835,6 +1862,7 @@ HAL_DYN_STORE::
     or [hl]
     ld [hl], a
     pop de
+    pop bc
     ldh a, [HR_T1 + 1]
     and $03
     or HIGH(wGbaOAM)

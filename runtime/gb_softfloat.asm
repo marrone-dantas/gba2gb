@@ -1478,6 +1478,79 @@ NAT_d2f_impl::
     jp RetNanF              ; libgcc returns the (positive) default NaN
 
 NAT_f2iz_impl::
+    ; fast path (Phase 5 B3, Snek: 130 conversions per movement tick): biased
+    ; exponent e < 127 (|x| < 1, zeros, denormals) -> 0; 127 <= e <= 150
+    ; (1 <= |x| < 2^24) -> 24-bit mantissa >> (150 - e), negated for x < 0.
+    ; Everything else (large values, inf, NaN) takes the exact path below.
+    ldh a, [HR_R0 + 3]
+    add a, a                ; exponent bits 7-1 (bit 0 clear)
+    ld b, a
+    ldh a, [HR_R0 + 2]
+    rlca
+    and 1                   ; exponent bit 0
+    or b
+    cp 127
+    jp c, .zero
+    cp 151
+    jr nc, .slow
+    ld b, a
+    ld a, 150
+    sub b
+    ld b, a                 ; shift count 0..23
+    ldh a, [HR_R0 + 2]
+    or $80                  ; implicit 1
+    ld e, a
+    ldh a, [HR_R0 + 1]
+    ld d, a
+    ldh a, [HR_R0]
+    ld c, a                 ; e:d:c = mantissa
+.fby:
+    ld a, b
+    cp 8
+    jr c, .fbi
+    sub 8
+    ld b, a
+    ld c, d
+    ld d, e
+    ld e, 0
+    jr .fby
+.fbi:
+    inc b
+.fbl:
+    dec b
+    jr z, .fdn
+    srl e
+    rr d
+    rr c
+    jr .fbl
+.fdn:
+    ldh a, [HR_R0 + 3]
+    bit 7, a
+    jr nz, .fng
+    ld a, c
+    ldh [HR_R0], a
+    ld a, d
+    ldh [HR_R0 + 1], a
+    ld a, e
+    ldh [HR_R0 + 2], a
+    xor a
+    ldh [HR_R0 + 3], a
+    ret
+.fng:
+    xor a
+    sub c
+    ldh [HR_R0], a
+    ld a, 0
+    sbc d
+    ldh [HR_R0 + 1], a
+    ld a, 0
+    sbc e
+    ldh [HR_R0 + 2], a
+    ld a, 0
+    sbc 0
+    ldh [HR_R0 + 3], a
+    ret
+.slow:
     ld hl, HR_R0
     ld de, sfA
     call UnpackF
