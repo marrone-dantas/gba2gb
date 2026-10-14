@@ -248,8 +248,13 @@ class Gen:
             for k, r in enumerate(x.regs):
                 self.ldimm(T2, 4 * k)
                 self.addsub("add", R(base), T2, T1, False)
-                if x.op == "stm":   # VRAM
+                if x.op == "stm" and reg == "dyn":
+                    self.e(f"ld c, LOW({h(R(r))})", "ld e, 4", "call HAL_DYN_STORE")
+                elif x.op == "stm":   # VRAM
                     self.e(f"ld c, LOW({h(R(r))})", "call HAL_VRAM_STORE32")
+                elif reg == "dyn":
+                    self.e("call HAL_DYN_ADDR")
+                    self.load_bytes(R(r), 4, False)
                 else:               # ROM
                     self.e(f"ldh a, [{h(T1 + 1)}]", "and $1F", "or $20", "ld h, a",
                            f"ldh a, [{h(T1)}]", "ld l, a")
@@ -300,6 +305,15 @@ class Gen:
         if reg == "rom":
             self.e(f"ldh a, [{h(T1 + 1)}]", "and $1F", "or $20", "ld h, a", f"ldh a, [{h(T1)}]", "ld l, a")
             self.load_bytes(rd, n, signed)
+            return
+        if reg == "dyn":
+            # Phase 5 A1: address space unknown at compile time -> run-time dispatch
+            if st:
+                self.e(f"ld c, LOW({h(rd)})", f"ld e, {n}", "call HAL_DYN_STORE")
+            else:
+                self.e("call HAL_DYN_ADDR")
+                self.load_bytes(rd, n, signed)
+            self.stats["dyn_accesses"] = self.stats.get("dyn_accesses", 0) + 1
             return
         if n == 1:
             raise LiftError(f"8-bit store to {reg.upper()} at {x.addr:#x} is not supported")

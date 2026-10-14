@@ -15,7 +15,10 @@ proven ranges of its address operands (range analysis + pointer induction below)
 An access whose address range intersects the I/O or OAM regions without being a
 single constant, or that mixes regions, is a compile error (`InterceptError`, all
 offending PCs listed). Pointers with no known range at all (TOP: stack pointers,
-pointers loaded from memory) are assumed to point to RAM.
+pointers loaded from memory) get their region from pointer provenance through
+registers and stack slots (tools/hal/provenance.py); when that is unknown the
+access is dispatched at run time on the address (region "dyn"), or rejected in
+strict mode. (Before Phase 5 they were silently assumed to be RAM.)
 
 Pointer induction: a phi `p = phi(C0, p + k)` (or `stmia p!`) whose loop exits on
 `cmp p', B` + `bne`/`beq`, with constants C0 < B and (B - C0) % k == 0, ranges over
@@ -105,10 +108,29 @@ def region_of(lo, hi):
     return None
 
 
-def classify(ssa):
+def classify(ssa, strict=False):
     """Returns ({addr: Access}, {"swi": {addr: n}}, warnings). Access = dict(region,
-    const address or None, width, store?)."""
+    const address or None, width, store?).
+
+    Pointers without a proven range get their address space from pointer
+    provenance (tools/hal/provenance.py, through stack slots). If that is unknown
+    too, the access becomes region "dyn" (runtime address-space dispatch,
+    HAL_DYN_ADDR / HAL_DYN_STORE) or, with strict=True, a compile error."""
+    from tools.hal.provenance import Provenance
     ind = pointer_induction(ssa)
+    prov = Provenance(ssa, ind)
+
+    def unknown(a, x, env, base, idx, st, n):
+        reg = prov.region(env, base, idx)
+        if reg is None:
+            if strict:
+                errors.append(f"{a:#010x}: {x.text}: pointer of unknown address space (strict mode)")
+                return None
+            return "dyn"
+        if (reg == "rom" and st) or (reg in ("pal", "vram") and not st) or reg in ("io", "oam"):
+            errors.append(f"{a:#010x}: {x.text}: {reg} access through a non-constant pointer not supported")
+            return None
+        return reg
     acc, errors, warnings = {}, [], []
     for a, x in sorted(ssa.prog.ins.items()):
         if x.op == "swi":
@@ -118,11 +140,14 @@ def classify(ssa):
         if x.op in ("ldm", "stm") and x.rd != 13:
             env = ssa.envs.get(a, {})
             iv = interval(env.get(x.rd), ind)
-            reg = region_of(iv[0], iv[1] + 4 * len(x.regs) - 1) if iv else "ram"
+            reg = region_of(iv[0], iv[1] + 4 * len(x.regs) - 1) if iv else \
+                unknown(a, x, env, x.rd, None, x.op == "stm", 4)
+            if reg is None and not iv:
+                continue
             if iv and reg is None:
                 errors.append(f"{a:#010x}: {x.text}: address range {iv[0]:#x}-{iv[1]:#x} spans regions")
                 continue
-            if reg not in ("ram", "rom", "vram") or (reg == "rom" and x.op == "stm") or \
+            if reg not in ("ram", "rom", "vram", "dyn") or (reg == "rom" and x.op == "stm") or \
                     (reg == "vram" and x.op == "ldm"):
                 errors.append(f"{a:#010x}: {x.text}: {reg} block transfer not supported")
                 continue
@@ -137,8 +162,13 @@ def classify(ssa):
         n = WIDTH[x.op[3:]]
         ib = interval(env.get(base), ind)
         ii = (0, 0) if idx is None else interval(env.get(idx), ind)
-        if base == 13 or ib is None or ii is None:
+        if base == 13:
             acc[a] = {"region": "ram", "const": None, "width": n, "store": x.op.startswith("str")}
+            continue
+        if ib is None or ii is None:
+            reg = unknown(a, x, env, base, idx, x.op.startswith("str"), n)
+            if reg is not None:
+                acc[a] = {"region": reg, "const": None, "width": n, "store": x.op.startswith("str")}
             continue
         lo, hi = ib[0] + ii[0] + disp, ib[1] + ii[1] + disp + n - 1
         reg = region_of(lo, hi)

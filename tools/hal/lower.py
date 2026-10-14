@@ -9,8 +9,11 @@ from tools.hal.intercept import classify, bg0cnt, InterceptError
 ARM_IMAGE_MAX = 0x2000   # mapped at ROM0 $2000-$3FFF: $2000 | (addr & $1FFF)
 
 
-def analyze(ssa):
-    acc, warnings = classify(ssa)
+def analyze(ssa, strict=None):
+    import os
+    if strict is None:
+        strict = os.environ.get("GBA2GB_STRICT_PTR", "") not in ("", "0")
+    acc, warnings = classify(ssa, strict=strict)
     nobj = 0
     for a, d in acc.items():
         if d["region"] == "oam" and d["store"]:

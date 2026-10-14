@@ -65,6 +65,7 @@ wC: ds 1
 wSx: ds 1
 wSy: ds 1
 wVtmp: ds 2
+wDynZero: ds 4     ; Phase 5 A1: reads through unknown pointers to unmapped space
 wVaddr: ds 2
 wVhalf: ds 1
 wAff: ds 1                    ; current object is affine (Compose)
@@ -924,3 +925,84 @@ BgpFlat: db $00, $55, $AA, $FF   ; BG0 off: everything = L0
 
 INCLUDE "hal_luts.inc"
 INCLUDE "gb_audio_shims.asm"
+
+; ---------------------------------------------------------------------------
+; Phase 5 A1: run-time address-space dispatch for pointers whose provenance is
+; unknown at compile time (docs/hal.md, "Pointer provenance").
+SECTION "hal_dyn", ROM0
+; T1 = ARM address -> hl = GB address of its bytes for a load:
+;   $08/$09xxxxxx -> ARM image in ROM0 ($2000 | addr & $1FFF)
+;   $02/$03xxxxxx -> ARM RAM window ($C000 | addr & $0FFF)
+;   anything else -> wDynZero (reads as 0)
+HAL_DYN_ADDR::
+    ldh a, [HR_T1 + 3]
+    and $FE
+    cp $08
+    jr z, .rom
+    cp $02
+    jr z, .ram
+    ld hl, wDynZero
+    xor a
+    ld [hl+], a
+    ld [hl+], a
+    ld [hl+], a
+    ld [hl-], a
+    dec hl
+    dec hl
+    ret
+.rom:
+    ldh a, [HR_T1 + 1]
+    and $1F
+    or $20
+    jr .lo
+.ram:
+    ldh a, [HR_T1 + 1]
+    and $0F
+    or $C0
+.lo:
+    ld h, a
+    ldh a, [HR_T1]
+    ld l, a
+    ret
+
+; Store e bytes (1/2/4) of the HRAM slot c to ARM address T1:
+;   RAM -> window, palette / VRAM (16/32-bit) -> HAL shims, anything else ignored.
+HAL_DYN_STORE::
+    ldh a, [HR_T1 + 3]
+    cp $02
+    jr z, .ram
+    cp $03
+    jr z, .ram
+    cp $05
+    jr z, .pal
+    cp $06
+    jr z, .vram
+    ret
+.ram:
+    ldh a, [HR_T1 + 1]
+    and $0F
+    or $C0
+    ld h, a
+    ldh a, [HR_T1]
+    ld l, a
+.cp:
+    ldh a, [c]
+    ld [hl+], a
+    inc c
+    dec e
+    jr nz, .cp
+    ret
+.pal:
+    ld a, e
+    cp 2
+    jp z, HAL_PAL_STORE16
+    cp 4
+    jp z, HAL_PAL_STORE32
+    ret
+.vram:
+    ld a, e
+    cp 2
+    jp z, HAL_VRAM_STORE16
+    cp 4
+    jp z, HAL_VRAM_STORE32
+    ret
