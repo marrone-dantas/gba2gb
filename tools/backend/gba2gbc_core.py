@@ -19,10 +19,13 @@ def run(cmd):
         raise RuntimeError(f"{' '.join(cmd)}\n{r.stdout}{r.stderr}")
 
 
-def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False, affine=None):
+def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False, affine=None,
+          peephole=None):
     """prune: None (Phase 0), 'flags' (narrowed backend but all values 32-bit),
     'sound' (proven ranges) or 'profile' (observed ranges + guards; needs profile).
-    hal: Phase 2 program mode (entry `main`, GB HAL runtime, intercepted I/O)."""
+    hal: Phase 2 program mode (entry `main`, GB HAL runtime, intercepted I/O).
+    peephole: Phase 5 A3 SM83 peephole pass (tools/backend/peephole.py); default on
+    unless GBA2GB_PEEPHOLE=0."""
     prog = lift_file(src, entry)
     info = None
     if hal:
@@ -60,6 +63,12 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         if hal:
             acc, info = lower.classify_phase0(prog)
         asm = generate_asm(prog, acc)
+    if peephole is None:
+        peephole = os.environ.get("GBA2GB_PEEPHOLE", "1") not in ("0", "")
+    prog.peephole = None
+    if peephole:
+        from tools.backend.peephole import optimize
+        asm, prog.peephole = optimize(asm)
     if hal:
         asm += lower.hal_sections(src, prog, info, affine)
         prog.hal_info = info
