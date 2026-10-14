@@ -32,12 +32,29 @@ REGIONS = [("io", 0x04000000, 0x040003FF), ("pal", 0x05000000, 0x050003FF),
            ("rom", 0x08000000, 0x09FFFFFF), ("ewram", 0x02000000, 0x0201FFFF),
            ("ram", 0x03000000, 0x03FFFFFF)]
 SRAM_BANK = 0x2000      # Phase 5 A2: EWRAM -> MBC5 SRAM, bank = (addr >> 13) & 15
+# Large homebrew images (docs/homebrew_port.md): CONFIG["rom_sram"] copies the ARM image to
+# SRAM banks 0.. at boot and turns ROM loads into SRAM loads (same bank formula as
+# EWRAM, so EWRAM data must then live above the image, e.g. 0x02018000 = bank 12);
+# CONFIG["vram_shadow"] keeps a copy of GBA VRAM 0x06000000-0x06007FFF (BG tiles/maps)
+# in SRAM banks 8-11 so the game can read its BG maps back (region "vsh").
+CONFIG = {"rom_sram": False, "vram_shadow": False}
 
 
 def ewram_bank(lo, hi):
-    """Compile-time SRAM bank of an EWRAM access range, or None if it spans banks."""
-    b0, b1 = (lo - 0x02000000) // SRAM_BANK, (hi - 0x02000000) // SRAM_BANK
-    return b0 if b0 == b1 else None
+    """Compile-time SRAM bank of an EWRAM (or SRAM-copied ROM) access range, or None if
+    it spans banks."""
+    base = 0x08000000 if lo >= 0x08000000 else 0x02000000
+    b0, b1 = (lo - base) // SRAM_BANK, (hi - base) // SRAM_BANK
+    return (b0 & 15) if b0 == b1 else None
+
+
+def remap(reg, st):
+    """Region after the large-image options (rom -> ewram, vram load -> vsh)."""
+    if reg == "rom" and not st and CONFIG["rom_sram"]:
+        return "ewram"
+    if reg == "vram" and not st and CONFIG["vram_shadow"]:
+        return "vsh"
+    return reg
 WIDTH = {"": 4, "b": 1, "h": 2, "sb": 1, "sh": 2}
 SWIS = {5: "VBlankIntrWait"}
 IO_NAMES = {0x000: "DISPCNT", 0x004: "DISPSTAT", 0x006: "VCOUNT", 0x008: "BG0CNT", 0x00A: "BG1CNT",
@@ -138,6 +155,7 @@ def classify(ssa, strict=False):
             return "dyn"
         if reg == "oam":
             return "dyn:oam"        # Phase 5 B3: OAM through a pointer -> run-time dispatch to the mirror
+        reg = remap(reg, st)
         if (reg == "rom" and st) or (reg in ("pal", "vram") and not st) or reg == "io":
             errors.append(f"{a:#010x}: {x.text}: {reg} access through a non-constant pointer not supported")
             return None
@@ -153,12 +171,14 @@ def classify(ssa, strict=False):
             iv = interval(env.get(x.rd), ind)
             reg = region_of(iv[0], iv[1] + 4 * len(x.regs) - 1) if iv else \
                 unknown(a, x, env, x.rd, None, x.op == "stm", 4)
+            if iv and reg:
+                reg = remap(reg, x.op == "stm")
             if reg is None and not iv:
                 continue
             if iv and reg is None:
                 errors.append(f"{a:#010x}: {x.text}: address range {iv[0]:#x}-{iv[1]:#x} spans regions")
                 continue
-            if reg and reg.split(":")[0] not in ("ram", "rom", "vram", "dyn", "ewram") or (reg == "rom" and x.op == "stm") or \
+            if reg and reg.split(":")[0] not in ("ram", "rom", "vram", "dyn", "ewram", "vsh") or (reg == "rom" and x.op == "stm") or \
                     (reg == "vram" and x.op == "ldm"):
                 errors.append(f"{a:#010x}: {x.text}: {reg} block transfer not supported")
                 continue
@@ -199,6 +219,7 @@ def classify(ssa, strict=False):
             # Phase 5 B3: OAM indexed by a loop / pointer -> run-time dispatch to the mirror
             acc[a] = {"region": "dyn", "const": None, "width": n, "store": st, "oam": True}
             continue
+        reg = remap(reg, st)
         if reg == "io" and const is None:
             errors.append(f"{a:#010x}: {x.text}: non-constant {reg.upper()} address {lo:#x}-{hi:#x}")
             continue
@@ -219,15 +240,16 @@ def classify(ssa, strict=False):
     return acc, warnings
 
 
-def bg0cnt(ssa, acc):
-    """Compile-time value of BG0CNT (needed to route VRAM writes to tiles or map)."""
+def bg0cnt(ssa, acc, bg=0):
+    """Compile-time value of BG0CNT (needed to route VRAM writes to tiles or map); a port
+    displaying another layer (CONFIG["display_bg"]) uses that layer's BGxCNT instead."""
     vals = set()
     for a, d in acc.items():
-        if d["region"] == "io" and d["store"] and d["const"] == 0x04000008:
+        if d["region"] == "io" and d["store"] and d["const"] == 0x04000008 + 2 * bg:
             v = ssa.envs[a].get(ssa.prog.ins[a].rd)
             if not _const(v):
-                raise InterceptError(f"{a:#010x}: BG0CNT written with a non-constant value")
+                raise InterceptError(f"{a:#010x}: BG{bg}CNT written with a non-constant value")
             vals.add(v.proven[0])
     if len(vals) > 1:
-        raise InterceptError(f"BG0CNT written with several values: {sorted(vals)}")
+        raise InterceptError(f"BG{bg}CNT written with several values: {sorted(vals)}")
     return vals.pop() if vals else None

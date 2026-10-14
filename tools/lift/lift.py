@@ -190,6 +190,24 @@ NATIVES = {"__aeabi_dadd": "dadd", "__aeabi_dsub": "dsub", "__aeabi_dmul": "dmul
            "__aeabi_uidiv": "uidiv", "__aeabi_uidivmod": "uidivmod"}
 
 
+# Port overrides (docs/homebrew_port.md): {function name: native name}; a BL to the
+# function (plain C name or its Itanium-mangled C++ name `_Z<len><name>...`) becomes
+# `call NAT_<native>` (runtime/ports/*.asm). Set by gba2gbc_core.build(port=...).
+EXTRA_NATIVES: dict[str, str] = {}
+
+
+def _override(name):
+    if name in EXTRA_NATIVES:
+        return EXTRA_NATIVES[name]
+    m = re.match(r"_Z(\d+)", name)
+    if m:
+        n = int(m.group(1))
+        base = name[m.end():m.end() + n]
+        if base in EXTRA_NATIVES and len(base) == n:
+            return EXTRA_NATIVES[base]
+    return None
+
+
 def native_targets(entries):
     """{address: short name} of the BL targets implemented natively."""
     out = {}
@@ -198,6 +216,8 @@ def native_targets(entries):
         base = "__" + m.group(1) if m else name
         if base in NATIVES:
             out[addr] = NATIVES[base]
+        elif EXTRA_NATIVES and _override(name):
+            out[addr] = _override(name)
     return out
 
 

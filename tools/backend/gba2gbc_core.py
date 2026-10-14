@@ -20,7 +20,30 @@ def run(cmd):
 
 
 def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False, affine=None,
-          peephole=None):
+          peephole=None, port=None):
+    """port: homebrew port description (docs/homebrew_port.md), a dict with
+    overrides {function: native}, asm [port runtime files], defines [rgbasm -D for the
+    HAL], rom_sram, vram_shadow, display_bg, port_init. Implies hal=True."""
+    if port:
+        from tools.lift import lift as _lift
+        from tools.hal import intercept as _ic
+        saved = dict(_ic.CONFIG), dict(_lift.EXTRA_NATIVES)
+        _lift.EXTRA_NATIVES.clear()
+        _lift.EXTRA_NATIVES.update(port.get("overrides", {}))
+        for k in ("rom_sram", "vram_shadow", "display_bg", "port_init"):
+            if k in port:
+                _ic.CONFIG[k] = port[k]
+        try:
+            return _build(src, out, entry, asm_out, prune, profile, opts, True, affine, peephole, port)
+        finally:
+            _ic.CONFIG.clear()
+            _ic.CONFIG.update(saved[0])
+            _lift.EXTRA_NATIVES.clear()
+            _lift.EXTRA_NATIVES.update(saved[1])
+    return _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole, None)
+
+
+def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole, port):
     """prune: None (Phase 0), 'flags' (narrowed backend but all values 32-bit),
     'sound' (proven ranges) or 'profile' (observed ranges + guards; needs profile).
     hal: Phase 2 program mode (entry `main`, GB HAL runtime, intercepted I/O).
@@ -81,8 +104,14 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         if hal:
             run(["rgbasm", "-DHAL", "-I", RUNTIME, "-o", ro, os.path.join(RUNTIME, "runtime.asm")])
             ho = os.path.join(td, "hal.o")
-            run(["rgbasm", "-I", RUNTIME, "-o", ho, os.path.join(RUNTIME, "gb_hal_shims.asm")])
+            defs = [f"-D{d}" for d in (port or {}).get("defines", [])]
+            run(["rgbasm", *defs, "-I", RUNTIME, "-o", ho, os.path.join(RUNTIME, "gb_hal_shims.asm")])
             objs.append(ho)
+            for i, pa in enumerate((port or {}).get("asm", [])):
+                po = os.path.join(td, f"port{i}.o")
+                inc = (port or {}).get("inc") or os.path.dirname(pa)
+                run(["rgbasm", *defs, "-I", RUNTIME, "-I", inc, "-o", po, pa])
+                objs.append(po)
         else:
             run(["rgbasm", "-I", RUNTIME, "-o", ro, os.path.join(RUNTIME, "runtime.asm")])
         so = os.path.join(td, "softfloat.o")

@@ -21,6 +21,11 @@ from __future__ import annotations
 import networkx as nx
 
 
+def _vsh():
+    from tools.hal.intercept import CONFIG
+    return CONFIG["vram_shadow"]
+
+
 def touches(ssa, acc):
     """Functions that (transitively) access EWRAM or dynamic memory."""
     prog = ssa.prog
@@ -30,7 +35,7 @@ def touches(ssa, acc):
         for n in fn.g:
             for x in fn.g.nodes[n]["ins"]:
                 r = acc.get(x.addr, {}).get("region")
-                if r in ("ewram", "dyn"):
+                if r in ("ewram", "dyn", "vsh") or (r == "vram" and _vsh()):
                     d = True
                 if x.op == "bl":
                     c.add(x.target)
@@ -57,8 +62,8 @@ def plan(ssa, acc, hoist=True):
             d = acc.get(x.addr)
             if d is not None and d["region"] == "ewram":
                 return ("use", d["bank"]) if d["bank"] is not None else ("clob", None)
-            if d is not None and d["region"] == "dyn":
-                return ("clob", None)
+            if d is not None and (d["region"] in ("dyn", "vsh") or (d["region"] == "vram" and _vsh())):
+                return ("clob", None)       # VRAM stores / shadow reads select SRAM banks 8-11
             if x.op == "bl" and (x.target in tch or x.target not in ssa.funcs):
                 return ("clob", None)
             return None

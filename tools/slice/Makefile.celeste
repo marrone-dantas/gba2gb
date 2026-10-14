@@ -10,7 +10,7 @@ FIXED ?= 1
 CC   := arm-none-eabi-gcc
 CXX  := arm-none-eabi-g++
 COMPAT := $(ROOT)/tools/slice/compat
-ARCHF := -mcpu=arm7tdmi -mthumb -Os -ffreestanding -fno-jump-tables -fno-builtin -ffunction-sections -fdata-sections -I$(COMPAT) -I$(ROOT)/tools/fixpt
+ARCHF := -g -mcpu=arm7tdmi -mthumb -Os -ffreestanding -fno-jump-tables -fno-builtin -ffunction-sections -fdata-sections -I$(COMPAT) -I$(ROOT)/tools/fixpt
 CFLAGS := $(ARCHF) -fgnu89-inline $(EXTRA_CFLAGS)
 CXXFLAGS := $(ARCHF) -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-unwind-tables -fno-asynchronous-unwind-tables -fpermissive -w $(EXTRA_CFLAGS)
 GAME := main map flags pico8

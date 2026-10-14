@@ -26,6 +26,54 @@ DEF MAX_GB_SPRITES EQU 40
 SECTION "vec_vblank", ROM0[$40]
     jp VBlankISR
 
+IF DEF(PROFILE)
+; Statistical profiler (tools/ports/profile.py): an LYC interrupt every 9 lines records
+; the interrupted PC and the ROMX bank into a 64-entry ring at $D700 (4 bytes each:
+; pc lo, pc hi, bank, 0); wProfN ($D7FF... see below) counts samples.
+SECTION "prof_vec", ROM0[$48]
+    jp ProfISR
+SECTION "prof_ram", WRAMX[$D700]
+wProfRing:: ds 252
+wProfIdx:: ds 1
+SECTION "prof_code", ROM0
+ProfISR:
+    push af
+    push hl
+    push de
+    ld hl, sp + 6
+    ld a, [hl+]
+    ld e, a
+    ld d, [hl]
+    ld a, [wProfIdx]
+    ld l, a
+    ld h, HIGH(wProfRing)
+    ld [hl], e
+    inc l
+    ld [hl], d
+    inc l
+    ld a, [wRomBank]
+    ld [hl+], a
+    ld [hl], 0
+    inc l
+    ld a, l
+    cp 252
+    jr c, .s
+    xor a
+.s:
+    ld [wProfIdx], a
+    ldh a, [$FF45]
+    add a, 9
+    cp 153
+    jr c, .l
+    sub 153
+.l:
+    ldh [$FF45], a
+    pop de
+    pop hl
+    pop af
+    reti
+ENDC
+
 SECTION "entry", ROM0[$100]
     nop
     jp HalStart
@@ -96,6 +144,7 @@ wAffSrc:: ds 2
 wAffDst:: ds 2
 
 SECTION "hal_state2", WRAMX[$D344]
+wDmaPage:: ds 1                ; PORT_OAM: shadow OAM page DMA'd by the VBlank ISR
 wPalDirty:: ds 1
 wComposeN:: ds 2
 wRejInval:: ds 1               ; Phase P1: a tile gained opaque pixels
@@ -187,6 +236,10 @@ HalStart:
     ldh [HR_SP + 1], a
     ld a, $03
     ldh [HR_SP + 3], a
+IF DEF(PORT_OAM)
+    ld a, HIGH(wShadowOAM)
+    ld [wDmaPage], a
+ENDC
     call GbaDataInit
     call BankInit
     call TimerInit                ; GBA timers 0/1 (gb_timer_shims.asm)
@@ -195,6 +248,12 @@ HalStart:
     ld a, 1
     ld [wNeedCompose], a          ; the first vsync shows the initial OAM
     ldh [rIE], a                  ; VBlank interrupt only
+IF DEF(PROFILE)
+    ld a, $40
+    ldh [rSTAT], a                ; LYC interrupt source
+    ld a, 3
+    ldh [rIE], a
+ENDC
     ei
     ld a, BANK(KernelEntry)
     ld hl, KernelEntry
@@ -212,7 +271,9 @@ MemClear:
 
 ; copied to HRAM_DMA: OAM DMA from the shadow OAM page (160 M-cycles + overhead)
 DmaRoutine:
+IF !DEF(PORT_OAM)
     ld a, HIGH(wShadowOAM)
+ENDC                              ; PORT_OAM: a = source page (VBlankISR)
     ldh [rDMA], a
     ld a, 40
 .w:
@@ -228,12 +289,24 @@ VBlankISR:
     or a
     jr z, .nodma
 .dma::
+IF DEF(PORT_OAM)
+    ld a, [wDmaPage]              ; port-owned OAM: double-buffered shadow pages
+ENDC
     call HRAM_DMA
     ld a, [wAffUsed]
     ld [wAffShown], a             ; the back slot is free only once the OAM stopped using it
     xor a
     ld [wDmaReady], a
 .nodma:
+IF DEF(PORT_OAM)
+    push bc
+    push de
+    push hl
+    call PortVBlank               ; port-owned palette / OAM state (runtime/ports)
+    pop hl
+    pop de
+    pop bc
+ENDC
     call TmSync                   ; extend the 4096 Hz TIMA clock
     call AffStream                ; Phase 4.1 frame streaming (stub: ret)
     ld a, [wScx]
@@ -363,7 +436,9 @@ HAL_VCOUNT::
     jr z, .nocomp
     xor a
     ld [wNeedCompose], a
+IF !DEF(PORT_OAM)
     call Compose
+ENDC
 .nocomp:
     pop bc
     ldh a, [rLY]
@@ -407,7 +482,9 @@ HAL_VBLANKINTRWAIT::
     ldh a, [rLCDC]
     bit 7, a
     call z, LcdOn
+IF !DEF(PORT_OAM)
     call Compose
+ENDC
     ld a, [wFrame]
     ld b, a
 .w:
@@ -1504,6 +1581,36 @@ HAL_VRAM_STORE16::
     inc c
     ldh a, [c]
     ld [wVtmp + 1], a
+IF DEF(VRAM_SHADOW)
+    ldh a, [HR_T1 + 2]
+    or a
+    jr nz, .nosh
+    ldh a, [HR_T1 + 1]
+    cp $80
+    jr nc, .nosh
+    call HAL_VSH_ADDR             ; keep the readable copy (SRAM banks 8-11)
+    ld a, [wVtmp]
+    ld [hl+], a
+    ld a, [wVtmp + 1]
+    ld [hl], a
+.nosh:
+ENDC
+IF DEF(PORT_BGMAP)
+    ; port mode: tiles are prebaked, only the displayed screen block reaches the GB map
+    ldh a, [HR_T1 + 2]
+    and 1
+    ret nz                        ; OBJ tiles: prebaked
+    ldh a, [HR_T1 + 1]
+    ld b, a
+    ld a, [GbaBgSbbHi]
+    ld c, a
+    ld a, b
+    sub c
+    ret c
+    cp 8
+    ret nc
+    jp .map
+ENDC
     ldh a, [HR_T1 + 2]
     and 1
     jr z, .bg
@@ -1854,6 +1961,10 @@ HAL_DYN_ADDR::
     jr z, .ew
     cp $07
     jr z, .oam
+IF DEF(VRAM_SHADOW)
+    cp $06
+    jp z, HAL_VSH_ADDR
+ENDC
     ld hl, wDynZero
     xor a
     ld [hl+], a
@@ -1875,10 +1986,14 @@ HAL_DYN_ADDR::
     or HIGH(wGbaOAM)
     jr .lo
 .rom:
+IF DEF(ROM_SRAM)
+    jr .ew                        ; ARM image copied to SRAM banks 0.. at boot
+ELSE
     ldh a, [HR_T1 + 1]
     and $1F
     or $20
     jr .lo
+ENDC
 .ram:
     ldh a, [HR_T1 + 1]
     and $0F
@@ -1888,6 +2003,24 @@ HAL_DYN_ADDR::
     ldh a, [HR_T1]
     ld l, a
     ret
+
+IF DEF(VRAM_SHADOW)
+; GBA VRAM address T1 (offset < $8000) -> SRAM bank 8 + (offset >> 13), hl = $A000 | (offset & $1FFF)
+HAL_VSH_ADDR::
+    ldh a, [HR_T1 + 1]
+    swap a
+    rrca
+    and 3
+    or 8
+    ld [$4000], a
+    ldh a, [HR_T1 + 1]
+    and $1F
+    or $A0
+    ld h, a
+    ldh a, [HR_T1]
+    ld l, a
+    ret
+ENDC
 
 ; Phase P1: a = GBA object index -> mark live (MarkLive) or live + dirty (MarkObj),
 ; extend wObjMax, request a compose. Preserves bc, de, hl.

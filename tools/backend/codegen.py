@@ -389,6 +389,11 @@ class Gen:
             self.e(f"ldh a, [{h(T1 + 1)}]", "and $1F", "or $20", "ld h, a", f"ldh a, [{h(T1)}]", "ld l, a")
             self.load_bytes(rd, n, signed)
             return
+        if reg == "vsh":
+            # VRAM read back from the SRAM shadow (tools/hal/intercept.py CONFIG["vram_shadow"])
+            self.e("call HAL_VSH_ADDR")
+            self.load_bytes(rd, n, signed)
+            return
         if reg == "dyn":
             # Phase 5 A1: address space unknown at compile time -> run-time dispatch
             if st:

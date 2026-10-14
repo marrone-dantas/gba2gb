@@ -34,7 +34,8 @@ def analyze(ssa, strict=None):
         view = 1
     else:
         view = 1 if nobj > 32 else 0
-    cnt = bg0cnt(ssa, acc)
+    from tools.hal.intercept import CONFIG
+    cnt = bg0cnt(ssa, acc, CONFIG.get("display_bg", 0))
     oam_st = {a: d for a, d in acc.items() if d["region"] == "oam" and d["store"]}
     io_st = {a: d for a, d in acc.items() if d["region"] == "io" and d["store"]}
     return acc, {"sram": srep, "nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st, "io_stores": io_st, "view": view}
@@ -64,9 +65,17 @@ def hal_sections(elf_path, prog, info, affine=None):
         if size and not (0x03000000 <= vma and vma + size <= 0x03000E00):
             raise InterceptError(f"data at {vma:#x}+{size:#x} outside the IWRAM area mapped to WRAM "
                                  "(0x03000000-0x03000DFF, docs/memory_map.md)")
+    from tools.hal.intercept import CONFIG
     img = prog.img.data
-    if prog.img.base != 0x08000000 or len(img) > ARM_IMAGE_MAX:
+    rom_sram = CONFIG["rom_sram"]
+    if prog.img.base != 0x08000000 or (len(img) > ARM_IMAGE_MAX and not rom_sram):
         raise InterceptError(f"ARM image of {len(img)} bytes does not fit the 8 KiB ROM0 window")
+    if rom_sram:
+        lim = (ew[0] - 0x02000000) if ew[1] else 0x10000
+        if CONFIG["vram_shadow"]:
+            lim = min(lim, 0x10000)          # banks 8-11: VRAM shadow
+        if len(img) > lim:
+            raise InterceptError(f"ARM image of {len(img)} bytes overlaps the SRAM banks of EWRAM / VRAM shadow")
     cnt = info["bg0cnt"] or 0
     cbb, sbb = (cnt >> 2) & 3, (cnt >> 8) & 31
     L = ['', 'SECTION "gba_init", ROM0', "GbaDataInit::"]
@@ -80,10 +89,22 @@ def hal_sections(elf_path, prog, info, affine=None):
     # Phase 5 A2: enable the MBC5 SRAM (EWRAM) and clear the banks in use
     L += ["    ld a, $0A", "    ld [$0000], a"]
     end = ew[0] - 0x02000000 + ew[1]
-    for b in range(0, (end + 0x1FFF) // 0x2000 if ew[1] else 0):
+    first = (ew[0] - 0x02000000) // 0x2000 if rom_sram else 0
+    for b in range(first, (end + 0x1FFF) // 0x2000 if ew[1] else 0):
         n = min(0x2000, end - b * 0x2000)
         L += [f"    ld a, {b}", "    ld [$4000], a", "    ld hl, $A000", f"    ld bc, {n}",
               f".e{b}:", "    xor a", "    ld [hl+], a", "    dec bc", "    ld a, b", "    or c", f"    jr nz, .e{b}"]
+    if rom_sram:
+        # copy the ARM image (ROMX chunks of 8 KiB) to SRAM banks 0.. (ROM loads read it there)
+        for k in range(0, (len(img) + 0x1FFF) // 0x2000):
+            n = min(0x2000, len(img) - k * 0x2000)
+            L += [f"    ld a, BANK(ArmImg{k})", "    ld [$2000], a", f"    ld a, {k}", "    ld [$4000], a",
+                  f"    ld de, ArmImg{k}", "    ld hl, $A000", f"    ld bc, {n}",
+                  f".i{k}:", "    ld a, [de]", "    inc de", "    ld [hl+], a", "    dec bc", "    ld a, b",
+                  "    or c", f"    jr nz, .i{k}"]
+        L += ["    ld a, 1", "    ld [$2000], a"]
+    if CONFIG.get("port_init"):
+        L += ["    call PortInit"]
     info["ewram"] = ew
     L += ["    ret", "GbaData:"] + db(data)
     view = info.get("view", 0)
@@ -91,7 +112,11 @@ def hal_sections(elf_path, prog, info, affine=None):
     L += [f"GbaObjCount:: db {info['nobj']}", f"GbaBgCbbHi:: db ${cbb * 0x40:02X}",
           f"GbaBgSbbHi:: db ${sbb * 8:02X}", f"GbaBg0Prio:: db {prio}",
           f"GbaView:: db {view}", f"GbaShadow:: db {1 if view and not ew[1] else 0}", "GbaFollow:: db 0", "GbaPinLo:: db 66", "GbaPinHi:: db 76"]
-    L += ['SECTION "arm_image", ROM0[$2000]', "ArmImage:"] + db(img)
+    if rom_sram:
+        for k in range(0, len(img), 0x2000):
+            L += [f'SECTION "arm_image_{k // 0x2000}", ROMX', f"ArmImg{k // 0x2000}:"] + db(img[k:k + 0x2000])
+    else:
+        L += ['SECTION "arm_image", ROM0[$2000]', "ArmImage:"] + db(img)
     from tools.affine.affine_lut_baker import bake_program
     aff_asm, rep = bake_program(elf_path, info["oam_stores"], **(affine or {}))
     info["affine"] = rep
