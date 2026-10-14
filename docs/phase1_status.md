@@ -103,3 +103,37 @@ Q8.8-exact are rejected by the tool instead of silently rounded.
 Late fix included in B3: dead phi nodes (e.g. a register merged at the function exit
 with its incoming argument but never read) no longer join storage webs — this let the
 physics loop registers become i16 and improved sound-mode cycles from −62% to −64%.
+
+## Phase 1.5 — WRAM / HRAM gap (docs/phase1_5_report.md, 1000 seeds)
+Totals over the 20 kernels (WRAM over 3 seeds; R0 matched Unicorn on every seed in
+every configuration):
+
+| config | WRAM touched | WRAM peak | HRAM reg bytes | M-cycles | code bytes |
+|---|---|---|---|---|---|
+| Phase 0 | 442 | 454 | 636 | 728,157 | 25,691 |
+| Phase 1 (sound) | 418 | 430 | 633 | 265,396 | 18,263 |
+| default ABI (items 1+3+4) | 366 (−17%) | 370 (−19%) | 593 (−7%) | 264,832 (−64%) | 17,873 (−30%) |
+| entry ABI opt-in (items 1-4) | 198 (−55%) | 198 (−56%) | 567 (−11%) | 261,690 (−64%) | 16,522 (−36%) |
+
+Per-item contribution (cumulative, totals):
+* item 1, LR save elision: touched −52 B, peak −52 B, HRAM −40 B, code −390 B;
+* item 3, frame padding trim: peak −8 B (k02, k18), touched 0 (padding is never written);
+* item 4, HRAM allocation per web: 0 B with the default ABI (every candidate web's home
+  slot is already referenced by the AAPCS push/pop, so moving it cannot free a slot);
+  −11 B HRAM with the entry ABI (k05 −3, k18 −8), plus k02 −987 cycles; k18 +84 cycles;
+* item 2, entry ABI (opt-in): touched −168 B, peak −172 B, HRAM −15 B, code −1,360 B.
+
+**Target −50% WRAM vs Phase 0: met only with the opt-in entry ABI (−55% touched,
+−56% peak). Not met with the default ABI (−17% / −19%).**
+
+Remaining limits:
+* with AAPCS, callee-saved spills (r4-r11 pushed at entry) are the bulk of the remaining
+  WRAM; they are required by the ABI unless the caller accepts the entry ABI;
+* item 3 only removes unreachable padding; arrays are not narrowed (k05 stores full
+  32-bit values and walks its array with a pointer that escapes the interval analysis;
+  k06 already uses bytes; k18 aliases a volatile buffer). A 50-seed Unicorn trace shows
+  no dead stack stores in any kernel;
+* item 4 allocates whole 4-byte slots and pins every web of non-entry functions and
+  every ABI-visible value; the "keep only if not worse" check makes it a heuristic;
+* WRAM is measured over 3 seeds (pattern fill); HRAM is a static count of referenced
+  bytes and always includes the argument slots R0-R3 and SP.
