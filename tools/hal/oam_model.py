@@ -77,5 +77,9 @@ def tile_2bpp(vram, off, levels):
 def levels_of(pal, base, obj):
     lv = [level(u16(pal, base + 2 * i), obj) for i in range(16)]
     if obj:
+        bd = level(u16(pal, 0), False)   # backdrop level: equal OBJ shades are moved
+        lv = [(2 if v != 2 else 3) if v == bd else v for v in lv]
         lv[0] = 0
-    return lv
+        return lv
+    l0 = lv[0]   # backdrop: GB colour 0, BGP swaps shades 0 and l0
+    return [0] + [l0 if v == 0 else 0 if v == l0 else v for v in lv[1:]]

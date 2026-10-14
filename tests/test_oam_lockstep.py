@@ -57,6 +57,11 @@ def test_oam_lockstep(name):
             dropped_frames += dropped > 0
             checked += 1
             if k in DEMOS[name]:
+                # backdrop: a GB pixel showing only backdrop must have the shade of GBA pal[0]
+                if name in ("obj_demo", "key_demo"):
+                    from tools.hal.oam_model import level
+                    shade = (255, 170, 85, 0)[level(u16(s["pal"], 0), False)]
+                    assert g.pb.screen.image.convert("L").getpixel((2, 140)) in range(shade - 8, shade + 9)
                 side_by_side(render(s), g.pb.screen.image, os.path.join(img_dir, f"{name}_f{k:03d}.png"))
         assert not mism, mism[:3]
         missing = sorted(set(range(1, N)) - seen)

@@ -48,6 +48,7 @@ wKeys:: ds 2                  ; last KEYINPUT value built by the input shim
 wDropped:: ds 1               ; hardware sprites dropped by the 40-sprite limit
 wUsed:: ds 1
 wBgLvl:: ds 16                ; BG palette bank 0: colour index -> GB colour (0-3)
+wBgRaw:: ds 16                ; BG palette bank 0: raw luminance levels (0-3)
 wObjLvl:: ds 16               ; OBJ palette bank 0: colour index -> GB colour (1-3, 0 = transparent)
 wObjI: ds 1
 wShape: ds 1
@@ -96,8 +97,15 @@ HalStart:
     inc c
     dec b
     jr nz, .cp
+    ld hl, wBgRaw                 ; GBA palette RAM is 0 (black = level 3) at reset
+    ld b, 16
+    ld a, 3
+.pr:
+    ld [hl+], a
+    dec b
+    jr nz, .pr
+    call BgPalUpdate
     ld a, %11100100
-    ldh [rBGP], a
     ldh [rOBP0], a
     ld a, %00011011               ; OBP1: inverted shades (GBA OBJ palette banks != 0)
     ldh [rOBP1], a
@@ -173,18 +181,14 @@ VBlankISR:
 ; map $9800.
 LcdOn:
     ld a, [wDispcnt + 1]
-    ld b, $80
-    bit 0, a                      ; DISPCNT bit 8: BG0
-    jr z, .nobg
-    set 0, b
-.nobg:
+    ld b, $81                     ; BG always on: BG0 off = flat backdrop (SetBgp)
     bit 4, a                      ; DISPCNT bit 12: OBJ
     jr z, .noobj
     set 1, b
 .noobj:
     ld a, b
     ldh [rLCDC], a
-    ret
+    jp SetBgp
 
 ; ---------------------------------------------------------------- I/O shims
 HAL_WR_DISPCNT::
@@ -783,8 +787,15 @@ HAL_PAL_STORE16::
     ld a, e
     cp 16
     ret nc
-    ld hl, wBgLvl
-    jr .st
+    ld hl, wBgRaw
+    ld a, l
+    add a, e
+    ld l, a
+    jr nc, .r2
+    inc h
+.r2:
+    ld [hl], b
+    jp BgPalUpdate
 .obj:
     dec a
     ret nz
@@ -798,8 +809,16 @@ HAL_PAL_STORE16::
 .nz:
     ld a, b
     or a
-    jr nz, .o
+    jr nz, .bd
     ld b, 1                       ; opaque colours never map to transparent 0
+.bd:
+    ld a, [wBgRaw]                ; same level as the backdrop: shift by one shade
+    cp b                          ; so sprites stay visible (3 -> 2, 1 -> 2, 2 -> 3)
+    jr nz, .o
+    ld b, 2
+    cp 2
+    jr nz, .o
+    ld b, 3
 .o:
     ld hl, wObjLvl
 .st:
@@ -811,5 +830,52 @@ HAL_PAL_STORE16::
 .s2:
     ld [hl], b
     ret
+
+; Backdrop (GBA BG palette entry 0 = transparent BG pixels and the screen when
+; BG0 is off). GB BG colour 0 is used for GBA colour index 0 (cleared VRAM, empty
+; map tiles); BGP maps it to the backdrop level L0. Opaque colours of level L are
+; stored as perm(L), perm = swap(0, L0), so BGP = perm shows them as L. With BG0
+; off the BG stays enabled and BGP maps every colour to L0 (uniform backdrop).
+BgPalUpdate:
+    ld a, [wBgRaw]
+    ld d, a                       ; L0
+    ld hl, wBgLvl + 1
+    ld bc, wBgRaw + 1
+    ld e, 15
+.l:
+    ld a, [bc]
+    inc bc
+    or a
+    jr nz, .n0
+    ld a, d
+    jr .st
+.n0:
+    cp d
+    jr nz, .st
+    xor a
+.st:
+    ld [hl+], a
+    dec e
+    jr nz, .l
+SetBgp:
+    ld a, [wBgRaw]
+    ld hl, BgpPerm
+    ld b, a
+    ld a, [wDispcnt + 1]
+    bit 0, a
+    jr nz, .on
+    ld hl, BgpFlat
+.on:
+    ld a, l
+    add a, b
+    ld l, a
+    jr nc, .h
+    inc h
+.h:
+    ld a, [hl]
+    ldh [rBGP], a
+    ret
+BgpPerm: db $E4, $E1, $C6, $27   ; BGP for L0 = 0..3 (swap shades 0 and L0)
+BgpFlat: db $00, $55, $AA, $FF   ; BG0 off: everything = L0
 
 INCLUDE "hal_luts.inc"

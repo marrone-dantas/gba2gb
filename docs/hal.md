@@ -41,7 +41,12 @@ at most 40 kept (OAM order = priority).
 * OBJ tiles < 256, BG tiles < 128, map: low byte of the tile index only, no flips/palettes.
 * Palettes must be written before tiles. Only BG bank 0 / OBJ bank 0 get luminance
   levels; OBJ banks ≠ 0 use the inverted OBP1.
-* Backdrop is always DMG colour 0 (white) – GBA palette entry 0 is not mapped.
+* Backdrop (Phase 3.0): GBA BG palette entry 0 is mapped to its DMG shade L0. GB colour 0
+  is reserved for GBA colour index 0; opaque colours of level L are stored as swap(0,L0)(L) and
+  BGP undoes the swap. With BG0 off the BG stays on and BGP maps every colour to L0. The palette
+  starts as black (GBA reset state). OBJ colours with the backdrop's level are moved one shade
+  (3→2, 1→2, 2→3) so sprites stay visible. Limit: changing palette entry 0 after OBJ colours were
+  set does not re-shift them (BG colours are recomputed on every BG bank-0 palette write).
 * No OBJ-vs-BG priority, no affine, no mode 3/4/5 bitmaps, only BG0.
 * L/R are always released (mapping option not implemented).
 * Constant OAM indexes only, at most 32 objects mirrored.
