@@ -1,0 +1,44 @@
+# Build JeffRuLz's Celeste Classic GBA. Upstream has no licence file, so the source is NOT
+# vendored: point CELESTE_SRC at a private checkout; outputs go to a private OUT directory.
+# arm-none-eabi-gcc, Thumb, against the libgba/maxmod compatibility headers in
+# tools/slice/compat (audio stubbed). FIXED=1 (default) first rewrites the sources with
+# tools/fixpt/float2fix.py (float -> 16.16 fixed point, compiled as C++).
+ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+CELESTE_SRC ?= /workspace/private/celeste/src
+OUT  ?= /workspace/private/celeste/build
+FIXED ?= 1
+CC   := arm-none-eabi-gcc
+CXX  := arm-none-eabi-g++
+COMPAT := $(ROOT)/tools/slice/compat
+ARCHF := -mcpu=arm7tdmi -mthumb -Os -ffreestanding -fno-jump-tables -fno-builtin -ffunction-sections -fdata-sections -I$(COMPAT) -I$(ROOT)/tools/fixpt
+CFLAGS := $(ARCHF) -fgnu89-inline $(EXTRA_CFLAGS)
+CXXFLAGS := $(ARCHF) -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-unwind-tables -fno-asynchronous-unwind-tables -fpermissive -w $(EXTRA_CFLAGS)
+GAME := main map flags pico8
+LIBO := $(OUT)/compat.o $(OUT)/libc_min.o $(OUT)/irq.o
+ifeq ($(FIXED),1)
+GAMEO := $(patsubst %,$(OUT)/fx/%.o,$(GAME))
+else
+GAMEO := $(patsubst %,$(OUT)/%.o,$(GAME))
+endif
+all: $(OUT)/celeste.gba
+$(OUT)/fx/.stamp: $(wildcard $(CELESTE_SRC)/src/*) $(ROOT)/tools/fixpt/float2fix.py
+	@mkdir -p $(OUT)/fx
+	cd $(ROOT) && python3 -m tools.fixpt.float2fix $(OUT)/fx $(patsubst %,$(CELESTE_SRC)/src/%.c,$(GAME))
+	touch $@
+$(OUT)/fx/%.o: $(OUT)/fx/.stamp $(ROOT)/tools/fixpt/fix16.hpp $(wildcard $(COMPAT)/*.h)
+	$(CXX) $(CXXFLAGS) -c -o $@ $(OUT)/fx/$*.cpp
+$(OUT)/%.o: $(CELESTE_SRC)/src/%.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(OUT)/%.o: $(COMPAT)/%.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(OUT)/irq.o: $(COMPAT)/irq.s
+	@mkdir -p $(OUT)
+	$(CC) -mcpu=arm7tdmi -c -o $@ $<
+$(OUT)/celeste.elf: $(GAMEO) $(LIBO) $(ROOT)/tests/demos/crt0.s $(ROOT)/tools/slice/gba_homebrew.ld
+	$(CC) -mcpu=arm7tdmi -mthumb -nostartfiles -Wl,--gc-sections -T $(ROOT)/tools/slice/gba_homebrew.ld -o $@ $(ROOT)/tests/demos/crt0.s $(GAMEO) $(LIBO) -lgcc -Wl,-Map,$(OUT)/celeste.map
+$(OUT)/celeste.gba: $(OUT)/celeste.elf
+	arm-none-eabi-objcopy -O binary $< $@
+clean:
+	rm -rf $(OUT)

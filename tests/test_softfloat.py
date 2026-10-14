@@ -94,7 +94,7 @@ def cases(op):
         for _ in range(N):
             e = r.randrange(120, 160)
             out.append([(r.getrandbits(1) << 31) | (e << 23) | r.getrandbits(23)])
-    elif op in ("idiv", "idivmod"):
+    elif op in ("idiv", "idivmod", "uidiv", "uidivmod"):
         out += [[a, b] for a in IEDGE for b in IEDGE]
         out += [[r.getrandbits(r.choice((8, 16, 32))), r.getrandbits(r.choice((4, 8, 16, 32)))]
                 for _ in range(N)]
@@ -121,7 +121,7 @@ def gb_run2(gb, regs):
 
 
 OPS = sorted(f[2:-2] for f in os.listdir(SDIR) if f.startswith("s_") and f.endswith(".c"))
-DOUBLE_RESULT = {"dadd", "dsub", "dmul", "lmul", "i2d", "f2d", "idivmod"}
+DOUBLE_RESULT = {"dadd", "dsub", "dmul", "lmul", "i2d", "f2d", "idivmod", "uidivmod"}
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -341,6 +341,14 @@ NAT_idivmod::
     ld a, BANK(NAT_idivmod_impl)
     ld hl, NAT_idivmod_impl
     jp FarCall
+NAT_uidiv::
+    ld a, BANK(NAT_uidiv_impl)
+    ld hl, NAT_uidiv_impl
+    jp FarCall
+NAT_uidivmod::
+    ld a, BANK(NAT_uidivmod_impl)
+    ld hl, NAT_uidivmod_impl
+    jp FarCall
 NAT_lmul::
     ld a, BANK(NAT_lmul_impl)
     ld hl, NAT_lmul_impl
@@ -2063,6 +2071,52 @@ NAT_fcmpgt_impl::
     jr SetR0Bool
 
 ; ------------------------------------------------------------------ integer division
+; R0 / R1 unsigned (uidiv / uidivmod): same core with both signs positive;
+; divisor 0 -> quotient $FFFFFFFF (0 for 0 / 0), like libgcc.
+NAT_uidiv_impl::
+NAT_uidivmod_impl::
+    ld hl, HR_R1
+    ld a, [hl+]
+    or [hl]
+    inc hl
+    or [hl]
+    inc hl
+    or [hl]
+    jr nz, .nz
+    ld hl, HR_R0
+    ld a, [hl+]
+    or [hl]
+    inc hl
+    or [hl]
+    inc hl
+    or [hl]
+    ret z
+    ld a, $FF
+    ldh [HR_R0], a
+    ldh [HR_R0 + 1], a
+    ldh [HR_R0 + 2], a
+    ldh [HR_R0 + 3], a
+    ret
+.nz:
+    xor a
+    ld [sfSr], a
+    ld [sfSq], a
+    ld de, sfD
+    ld hl, HR_R1
+    REPT 4
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    ENDR
+    ld de, sfQ
+    ld hl, HR_R0
+    REPT 4
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    ENDR
+    jp NAT_idivmod_impl.core
+
 ; R0 / R1 signed: quotient -> R0, remainder -> R1 (idivmod); idiv = quotient only.
 NAT_idiv_impl::
 NAT_idivmod_impl::
@@ -2094,6 +2148,7 @@ NAT_idivmod_impl::
     ld c, LOW(HR_R0)
     ld hl, sfQ
     call AbsTo
+.core:
     ; R = 0; skip leading zero bits of Q: n = significant bits
     xor a
     ld hl, sfR

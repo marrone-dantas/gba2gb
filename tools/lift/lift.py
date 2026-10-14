@@ -186,7 +186,8 @@ NATIVES = {"__aeabi_dadd": "dadd", "__aeabi_dsub": "dsub", "__aeabi_dmul": "dmul
            "__aeabi_f2iz": "f2iz", "__aeabi_i2f": "i2f", "__aeabi_fmul": "fmul",
            "__aeabi_fadd": "fadd", "__aeabi_fsub": "fsub", "__aeabi_fcmpeq": "fcmpeq",
            "__aeabi_fcmplt": "fcmplt", "__aeabi_fcmpgt": "fcmpgt", "__aeabi_idiv": "idiv",
-           "__aeabi_idivmod": "idivmod", "__aeabi_lmul": "lmul"}
+           "__aeabi_idivmod": "idivmod", "__aeabi_lmul": "lmul",
+           "__aeabi_uidiv": "uidiv", "__aeabi_uidivmod": "uidivmod"}
 
 
 def native_targets(entries):
