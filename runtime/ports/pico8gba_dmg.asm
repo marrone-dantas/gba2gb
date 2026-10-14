@@ -390,3 +390,8 @@ NAT_p8_update_screen::
 ; prebaked (PortInit) or handled by update_screen.
 NAT_p8_cpufastset::
     ret
+
+; ---------------------------------------------------------------- calls with no visible effect on DMG
+; (rectfill: BG0 overlay boxes, not displayed by this port)
+NAT_p8_nop::
+    ret

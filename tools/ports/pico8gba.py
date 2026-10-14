@@ -21,7 +21,9 @@ PICO8 = [(0, 0, 0), (29, 43, 83), (126, 37, 83), (0, 135, 81), (171, 82, 54), (9
          (194, 195, 199), (255, 241, 232), (255, 0, 77), (255, 163, 0), (255, 236, 39),
          (0, 228, 54), (41, 173, 255), (131, 118, 156), (255, 119, 168), (255, 204, 170)]
 OVERRIDES = {"spr": "p8_spr", "pal": "p8_pal", "camera": "p8_camera",
-             "update_screen": "p8_update_screen", "CpuFastSet": "p8_cpufastset"}
+             "update_screen": "p8_update_screen", "CpuFastSet": "p8_cpufastset",
+             # rectfill only draws on the BG0 overlay, which the DMG port does not display
+             "rectfill": "p8_nop"}
 
 
 def luma(c):

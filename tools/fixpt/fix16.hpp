@@ -28,8 +28,8 @@ struct fix16 {
     constexpr fix16(char i) : v((int32_t)((uint32_t)(int)i << 16)) {}
     constexpr fix16(bool b) : v(b ? 65536 : 0) {}
     // C float->integer conversion truncates toward zero
-    constexpr int toint() const { return v >= 0 ? (v >> 16) : -((-v) >> 16); }
-    constexpr operator int() const { return toint(); }
+    constexpr __attribute__((always_inline)) int toint() const { return v >= 0 ? (v >> 16) : -((-v) >> 16); }
+    constexpr __attribute__((always_inline)) operator int() const { return toint(); }
     constexpr fix16 operator-() const { return raw(-v); }
     constexpr fix16 operator+() const { return *this; }
     fix16 &operator+=(fix16 b) { v += b.v; return *this; }
