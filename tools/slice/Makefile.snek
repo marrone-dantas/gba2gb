@@ -1,0 +1,22 @@
+# Phase 5 B1: build the original Snek GBA (third_party/snek-gba, GPL-3.0) with
+# arm-none-eabi-gcc in Thumb mode, our minimal ARM crt0 and link script, a newlib-compatible
+# rand/srand (tools/slice/snek_libc.c) and libgcc (soft-float, division). Output: build/snek/snek.{elf,gba}
+ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+SRC  := $(ROOT)/third_party/snek-gba
+OUT  := $(ROOT)/build/snek
+CC   := arm-none-eabi-gcc
+CFLAGS := -mcpu=arm7tdmi -mthumb -Os -ffreestanding -fno-builtin -fno-jump-tables -I$(SRC)/include
+OBJS := $(OUT)/main.o $(OUT)/game.o $(OUT)/graphics.o $(OUT)/snek_libc.o
+all: $(OUT)/snek.gba
+$(OUT)/%.o: $(SRC)/src/%.c $(wildcard $(SRC)/include/*.h)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(OUT)/snek_libc.o: $(ROOT)/tools/slice/snek_libc.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(OUT)/snek.elf: $(OBJS) $(ROOT)/tests/demos/crt0.s $(ROOT)/tests/demos/gba.ld
+	$(CC) -mcpu=arm7tdmi -mthumb -nostartfiles -T $(ROOT)/tests/demos/gba.ld -o $@ $(ROOT)/tests/demos/crt0.s $(OBJS) -lgcc -Wl,-Map,$(OUT)/snek.map
+$(OUT)/snek.gba: $(OUT)/snek.elf
+	arm-none-eabi-objcopy -O binary $< $@
+clean:
+	rm -rf $(OUT)
