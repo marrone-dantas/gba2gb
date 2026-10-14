@@ -210,6 +210,9 @@ class Program:
         self.ins: dict[int, Ins] = {}
         self.entry = img.entries[entry]
         self.natives = native_targets(img.entries) if natives else {}
+        # Phase P1: idiom -> HAL lifting (tools/lift/idioms.py); GBA2GB_IDIOMS=0 disables
+        import os
+        self.idioms = natives and os.environ.get("GBA2GB_IDIOMS", "1") not in ("0", "")
         self.funcs = {self.entry}
         self.cfg = nx.DiGraph()
         self._decode()
@@ -231,6 +234,14 @@ class Program:
             while a not in self.ins:
                 x = self._decode_one(a)
                 self.ins[a] = x
+                if x.op == "bl" and x.target not in self.natives and self.idioms:
+                    from tools.lift import idioms
+                    o = x.target - self.img.base
+                    if 0 <= o < len(self.img.data):
+                        nm = idioms.match(self.md, self.img, x.target,
+                                          lambda a, n: self.img.data[a - self.img.base:a - self.img.base + n])
+                        if nm:
+                            self.natives[x.target] = nm
                 if x.op == "bl" and x.target in self.natives:
                     x.native = self.natives[x.target]
                 elif x.op == "bl":

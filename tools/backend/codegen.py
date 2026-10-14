@@ -359,8 +359,9 @@ class Gen:
             if st:
                 for i in range(n):
                     self.e(f"ldh a, [{h(rd + i)}]", f"ld [${OAM_MIRROR + o + i:04X}], a")
-                # Phase 5 B3: mark the mirror dirty so the key-read compose (GbaView) runs
-                self.e("ld a, 1", "ld [wOamDirty], a")
+                # Phase 5 B3/P1: mark the object dirty (dirty-tracked compose) and the
+                # mirror dirty so the key-read compose (GbaView) runs
+                self.e(f"ld hl, wObjState + {(o // 8) & 127}", "set 1, [hl]", "ld a, 1", "ld [wOamDirty], a")
                 if o % 8 == 6 and (o % 32) // 8 in (0, 1):
                     # OBJ_AFFINE pa / pb: select a pre-rotated frame (Phase 4.1, docs/affine.md)
                     self.e("call HAL_AFFINE_SEL")

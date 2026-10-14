@@ -99,13 +99,18 @@ SECTION "hal_state2", WRAMX[$D344]
 wPalDirty:: ds 1
 wComposeN:: ds 2
 wOamDirty:: ds 1
-wLive:: ds 16                 ; bitmap of objects that were ever stored
 wBgW:: ds 16                  ; BG tiles written (bitmap, tile shadow)
 wObjW:: ds 32                 ; OBJ tiles written
 wRcBank: ds 1
 wRcT: ds 1
 wRcOff: ds 2
 wRcK: ds 1
+
+SECTION "obj_state", WRAMX[$D800]
+; Phase P1: one byte per GBA object: bit 0 live (ever stored), bit 1 dirty (changed
+; since the last compose). The native SM83 stack now starts at $E000 and grows down
+; to at most $D900 (B4 low-water mark: $DFE8).
+wObjState:: ds 128
 
 SECTION "gba_oam_mirror", WRAMX[$D400]
 wGbaOAM:: ds 1024             ; GBA OAM 0x07000000-0x070003FF (128 objects)
@@ -511,30 +516,10 @@ Compose::
     cp c
     jr c, .rk                     ; pinned: already drawn
 .np:
-    ld a, b                       ; skip objects that were never stored
-    ld c, a
-    srl a
-    srl a
-    srl a
-    ld hl, wLive
-    add a, l
-    ld l, a
-    jr nc, .lv
-    inc h
-.lv:
-    ld a, c
-    and 7
-    ld c, a
-    ld a, [hl]
-    inc c
-.ls:
-    dec c
-    jr z, .lt
-    rrca
-    jr .ls
-.lt:
-    rrca
-    jr nc, .rk
+    ld h, HIGH(wObjState)         ; skip objects that were never stored
+    ld l, b
+    bit 0, [hl]
+    jr z, .rk
     call CObj
     jr .rk
 .rot:
@@ -1780,6 +1765,145 @@ HAL_DYN_ADDR::
     ld l, a
     ret
 
+; Phase P1: a = GBA object index -> mark live + dirty, extend wObjMax, request a
+; compose. Preserves bc, de, hl.
+MarkObj::
+    push hl
+    ld l, a
+    ld h, HIGH(wObjState)
+    ld a, [hl]
+    or 3
+    ld [hl], a
+    ld a, l
+    inc a
+    ld h, a
+    ld a, [wObjMax]
+    cp h
+    jr nc, .m
+    ld a, h
+    ld [wObjMax], a
+.m:
+    ld a, 1
+    ld [wOamDirty], a
+    pop hl
+    ret
+
+; Phase P1 idiom -> HAL (tools/lift/idioms.py "objsetpos"): obj_set_pos(r0 = obj,
+; r1 = x, r2 = y): attr0 = (attr0 & ~$FF) | (y & $FF), attr1 = (attr1 & ~$1FF) | (x & $1FF).
+; Leaves r1 = x & $1FF, r2 = y & $FF, r3 = new attr1, like the Thumb body.
+NAT_objsetpos::
+    ldh a, [HR_R0 + 3]
+    cp $07
+    jr nz, .slow
+    ldh a, [HR_R0]
+    bit 0, a
+    jr nz, .slow                  ; unaligned: exact generic path
+    ld l, a
+    ldh a, [HR_R0 + 1]
+    and 3
+    or HIGH(wGbaOAM)
+    ld h, a
+    ldh a, [HR_R2]
+    ld [hl+], a                   ; attr0 low = y
+    inc hl
+    ldh a, [HR_R1]
+    ld [hl+], a                   ; attr1 low = x
+    ldh a, [HR_R1 + 1]
+    and 1
+    ld b, a
+    ld a, [hl]
+    and $FE
+    or b
+    ld [hl], a                    ; attr1 high
+    ldh [HR_R3 + 1], a
+    ldh a, [HR_R1]
+    ldh [HR_R3], a
+    ; object index = (addr & $3FF) >> 3
+    ldh a, [HR_R0 + 1]
+    and 3
+    ld h, a
+    ldh a, [HR_R0]
+    srl h
+    rra
+    srl h
+    rra
+    srl h
+    rra
+    call MarkObj
+    jr .regs
+.slow:
+    ; attr0 through the generic dispatch
+    ld c, LOW(HR_R0)
+    call .t1
+    call HAL_DYN_ADDR
+    inc hl
+    ld a, [hl]
+    ldh [HR_T2 + 1], a
+    ldh a, [HR_R2]
+    ldh [HR_T2], a
+    ld c, LOW(HR_T2)
+    ld e, 2
+    call HAL_DYN_STORE
+    ; attr1 at r0 + 2
+    ld c, LOW(HR_R0)
+    call .t1
+    ldh a, [HR_T1]
+    add a, 2
+    ldh [HR_T1], a
+    ldh a, [HR_T1 + 1]
+    adc a, 0
+    ldh [HR_T1 + 1], a
+    ldh a, [HR_T1 + 2]
+    adc a, 0
+    ldh [HR_T1 + 2], a
+    ldh a, [HR_T1 + 3]
+    adc a, 0
+    ldh [HR_T1 + 3], a
+    call HAL_DYN_ADDR
+    push hl
+    inc hl
+    ld a, [hl]
+    and $FE
+    ld b, a
+    ldh a, [HR_R1 + 1]
+    and 1
+    or b
+    ldh [HR_T2 + 1], a
+    ldh [HR_R3 + 1], a
+    ldh a, [HR_R1]
+    ldh [HR_T2], a
+    ldh [HR_R3], a
+    pop hl
+    ld c, LOW(HR_T2)
+    ld e, 2
+    call HAL_DYN_STORE
+.regs:
+    xor a
+    ldh [HR_R3 + 2], a
+    ldh [HR_R3 + 3], a
+    ldh [HR_R2 + 1], a
+    ldh [HR_R2 + 2], a
+    ldh [HR_R2 + 3], a
+    ldh [HR_R1 + 2], a
+    ldh [HR_R1 + 3], a
+    ldh a, [HR_R1 + 1]
+    and 1
+    ldh [HR_R1 + 1], a
+    ret
+.t1:                              ; T1 = 4 bytes of HRAM slot c
+    ldh a, [c]
+    ldh [HR_T1], a
+    inc c
+    ldh a, [c]
+    ldh [HR_T1 + 1], a
+    inc c
+    ldh a, [c]
+    ldh [HR_T1 + 2], a
+    inc c
+    ldh a, [c]
+    ldh [HR_T1 + 3], a
+    ret
+
 ; Phase 5 A2: select the MBC5 SRAM bank of the EWRAM address T1:
 ; bank = (addr >> 13) & 15 (bits 13-15 from T1+1, bit 16 from T1+2). Clobbers a, b.
 HAL_EW_SETBANK::
@@ -1814,55 +1938,17 @@ HAL_DYN_STORE::
     jr z, .oam
     ret
 .oam:
-    push bc                       ; c = source HRAM slot (used by .cp below)
-    push de                       ; e = byte count
-    ldh a, [HR_T1 + 1]            ; object = (addr & $3FF) >> 3; extend wObjMax
+    ldh a, [HR_T1 + 1]            ; object = (addr & $3FF) >> 3
     and 3
-    ld d, a
+    ld h, a
     ldh a, [HR_T1]
-    srl d
+    srl h
     rra
-    srl d
+    srl h
     rra
-    srl d
+    srl h
     rra
-    ld e, a                       ; object index
-    inc a
-    ld d, a
-    ld a, [wObjMax]
-    cp d
-    jr nc, .om
-    ld a, d
-    ld [wObjMax], a
-.om:
-    ld a, 1
-    ld [wOamDirty], a
-    ld a, e                       ; set live bit
-    ld c, a
-    srl a
-    srl a
-    srl a
-    ld hl, wLive
-    add a, l
-    ld l, a
-    jr nc, .ln
-    inc h
-.ln:
-    ld a, c
-    and 7
-    ld b, a
-    ld a, 1
-    inc b
-.lsh:
-    dec b
-    jr z, .lset
-    add a, a
-    jr .lsh
-.lset:
-    or [hl]
-    ld [hl], a
-    pop de
-    pop bc
+    call MarkObj
     ldh a, [HR_T1 + 1]
     and $03
     or HIGH(wGbaOAM)

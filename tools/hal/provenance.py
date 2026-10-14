@@ -118,6 +118,10 @@ class Provenance:
             s = self._operand(v, x.a) | self._operand(v, x.b)
             s -= INT
             return s or INT
+        if x.op in ("lsl", "mul"):
+            # Phase P1: a shifted or multiplied value is a scaled index, never a
+            # pointer (base + (i << k) keeps the base's region; docs/hal.md)
+            return INT
         ops = [self._operand(v, o) for o in (x.a, x.b) if o is not None]
         if ops and all(o <= INT for o in ops):
             return INT

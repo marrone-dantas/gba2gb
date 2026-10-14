@@ -18,7 +18,8 @@ def test_memory_map(input_rom):
     sym = read_sym(input_rom[:-4] + ".sym")
     assert sym["wShadowOAM"][1] == 0xD000      # outside the ARM window $C000-$CFFF
     assert sym["wGbaOAM"][1] == 0xD400
-    assert all((0xD000 <= a < 0xD300) or (0xD344 <= a < 0xD800) for n, (b, a) in sym.items() if n.startswith("w") and b == 1)
+    # $D800-$D87F: per-object state (Phase P1); the native stack stays above $D900
+    assert all((0xD000 <= a < 0xD300) or (0xD344 <= a < 0xD880) for n, (b, a) in sym.items() if n.startswith("w") and b == 1)
 
 
 def test_keyinput_all_combinations(input_rom):
