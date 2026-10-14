@@ -67,12 +67,12 @@ instruction definition (200 seeds) lies inside its proven range, for all 20 kern
 ### Acceptance targets (vs Phase 0)
 | target | result | status |
 |---|---|---|
-| −55% M-cycles | −62% total, −60% mean per kernel (sound) | **met** |
+| −55% M-cycles | −64% total, −60.7% mean per kernel (sound) | **met** |
 | −50% WRAM | −5% (442 → 418 bytes touched) | **not met** |
 
 Where the cycle gain comes from (honest breakdown, see the `flags` column): most of it is
 *not* bit-width related — flag elision and cheaper constant shifts/multiplies already give
-−57% total; narrowing to 8/16-bit storage adds the remaining ~5 points (much more on
+−57% total; narrowing to 8/16-bit storage adds the remaining ~7 points (much more on
 byte-heavy kernels: k12 −88%, k18 −83%, k02 −74%). k09 (−5%) is pure 32×32 MUL with
 unknown operands.
 
@@ -88,3 +88,18 @@ each register keeps the width of its widest SSA value. What would close the gap:
    address escapes, then narrow each slot/array element to its proven width
    (k05/k06/k18 arrays) and pack the frame;
 4. register-file allocation by SSA web instead of a fixed 4-byte slot per ARM register.
+
+## B3 — physics precision (tests/test_physics_q88.py)
+Jump parabola (gravity, ground bounce with 3/4 restitution, re-jump, friction) in
+Q16.16 (`tests/physics/jump_q16.c`) vs the opt-in Q8.8 requantization (10 patches:
+8 constants, 2 `asr #16 → #8`), profile-guided pruned (11 guards; 14 one-byte and 9
+two-byte values) and run on PyBoy. Every frame 1..600, both axes (1200 samples):
+**max screen-position error 0 px** (acceptance ≤ 1 px), no guard fired. Cost on a
+sample of 24 calls: 366,829 → 226,720 M-cycles per call (−38%) vs the Phase 0 Q16.16
+build. The error is 0 because every constant is a multiple of 1/256 and the only lossy
+step (`vy >> 2` at bounces) never shifts a whole pixel; constants that are not
+Q8.8-exact are rejected by the tool instead of silently rounded.
+
+Late fix included in B3: dead phi nodes (e.g. a register merged at the function exit
+with its incoming argument but never read) no longer join storage webs — this let the
+physics loop registers become i16 and improved sound-mode cycles from −62% to −64%.

@@ -87,10 +87,34 @@ class UF:
         self.p[self.find(a)] = self.find(b)
 
 
+def live_values(ssa):
+    """Values read by some instruction (or interprocedural link), plus the phi/pi
+    values that transitively feed them. Dead phis do not constrain storage."""
+    live = set()
+    for env in ssa.envs.values():
+        live.update(env.values())
+    for v in ssa.values:
+        live.update(v.links or [])
+    work = list(live)
+    while work:
+        v = work.pop()
+        srcs = list(v.args.values()) if v.kind == "phi" else ([v.env["x"]] if v.kind == "pi" else [])
+        if v.kind == "pi" and isinstance(v.env["b"], ra.Value):
+            srcs.append(v.env["b"])
+        for a in srcs:
+            if a not in live:
+                live.add(a)
+                work.append(a)
+    return live
+
+
 def webs(ssa):
     uf = UF()
+    live = live_values(ssa)
     for v in ssa.values:
         uf.find(v)
+        if v not in live:
+            continue
         if v.kind == "phi":
             for a in v.args.values():
                 uf.union(v, a)
@@ -185,8 +209,11 @@ def build_plan(elf_or_prog, profile=None, mode="sound"):
             for v in ssa.values:
                 if v.kind != "ins" or v.observed is None or v in assume or v.reg in (13, 14):
                     continue
-                if getattr(v, "observed_derived", False) or v.ins.op in ("bl",):
-                    continue
+                if getattr(v, "observed_derived", False) or v.ins.op in ("bl", "pop", "pop_ret", "ldm"):
+                    continue  # call results / restored caller registers: harness artifacts
+                if v.ins.op == "mov" and isinstance(v.ins.a, str) and v.env.get(int(v.ins.a[1:])) is not None \
+                        and v.env[int(v.ins.a[1:])].kind == "param":
+                    continue  # plain copy of an incoming register (its value is the caller's)
                 oc, pc = ra.width_class(v.observed), ra.width_class(v.proven)
                 if WIDTH_ORDER[oc] < WIDTH_ORDER[pc]:
                     assume[v] = CLASS_RANGE[oc]

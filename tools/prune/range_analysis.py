@@ -526,6 +526,8 @@ def analyze(ssa: SSAProgram, assume: dict | None = None):
             new = widen(old, join(old, new))
         else:
             new = join(old, new) if v.kind == "phi" else new
+        if new is not None and v in assume:  # assumptions survive widening
+            new = meet(new, assume[v])
         if new == old:
             continue
         v.proven = new
