@@ -131,6 +131,10 @@ class NarrowGen(Gen):
             self.e("; (deleted: fused extension)")
             return
         self.cur_live = self.live.get(x.addr, set("NZCV"))
+        fr = self.plan.frame
+        if fr is not None and x.addr in fr.trim:  # item 3: trimmed frame padding
+            self.e(f"; frame trimmed: #{x.b} -> #{fr.trim[x.addr]}")
+            x = type(x)(**{**x.__dict__, "b": fr.trim[x.addr]})
         op = x.op
         (w, ext), dv = self.dstore(x) if x.rd is not None else ((4, "z"), None)
         guarded = dv is not None and dv in self.plan.guards

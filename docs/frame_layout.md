@@ -21,3 +21,29 @@ Callees keep the normal ABI.
 
 Assumption shared by both: memory accesses through pointers to local objects stay
 inside those objects (C semantics), so they never touch the register-save area.
+
+## 3. Frame relayout (item 3, sound, default on; `frame_trim`)
+`frame_trims()` runs an escape analysis on the stack frame of every function:
+every SP-derived pointer gets an offset *interval* from the entry SP (constant
+offsets, `add rX, ptr, rY` with a proven range of rY, phi hulls; intervals that do
+not stabilize, e.g. pointer induction variables, are dropped). A pointer **escapes**
+when it is stored to memory, passed to a call, returned, consumed by an untracked
+phi/ALU operation, or used with an index of unknown range. If nothing escapes, every
+access to the locals area has a known byte interval, and padding at the top of the
+area allocated by `sub sp, #N` that no access can reach is removed: the prologue and
+every matching `add sp, #N` use `N - P` (P rounded down to words). Locals keep their
+SP-relative offsets, so the code is unchanged otherwise. Frames with accesses outside
+the locals area (stack arguments) are not touched.
+
+Results (20 kernels): only k02 (20 -> 16) and k18 (12 -> 8) have unreachable padding;
+peak WRAM drops by 4 bytes each, touched WRAM is unchanged (padding was never written).
+Narrowing or packing the arrays themselves is **not** done, because it would not help
+soundly on these kernels:
+* a Unicorn trace over 50 seeds shows every stack byte that is written is read back
+  (no dead stores: nothing to drop);
+* k05 stores full 32-bit values (`a[i] = r0 ^ r1`, ...) — no narrower slot is sound,
+  and its pointer walk escapes the interval analysis anyway;
+* k06 already stores bytes; k02 stores words and reads all their bytes back;
+* k18 uses `volatile` mixed byte/half/word aliasing of one buffer.
+Note also that 8-byte SP alignment at calls is not preserved after trimming; Thumb-1
+code has no doubleword accesses, so nothing on this target depends on it.

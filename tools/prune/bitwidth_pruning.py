@@ -196,7 +196,7 @@ def fuse_extensions(plan: Plan):
 
 
 # ---------------------------------------------------------------- driver
-DEFAULT_OPTS = {"skip_lr": True, "entry_abi": "aapcs"}
+DEFAULT_OPTS = {"skip_lr": True, "entry_abi": "aapcs", "frame_trim": True}
 
 
 def build_plan(elf_or_prog, profile=None, mode="sound", opts=None):
@@ -235,9 +235,9 @@ def build_plan(elf_or_prog, profile=None, mode="sound", opts=None):
             ra.analyze(ssa, assume)
     assign_storage(plan)
     fuse_extensions(plan)
-    if opts["skip_lr"] or opts["entry_abi"] != "aapcs":
+    if opts["skip_lr"] or opts["entry_abi"] != "aapcs" or opts["frame_trim"]:
         from tools.prune.frame import Frame
-        plan.frame = Frame(ssa, opts["entry_abi"], opts["skip_lr"])
+        plan.frame = Frame(ssa, opts["entry_abi"], opts["skip_lr"], opts["frame_trim"])
     return plan
 
 

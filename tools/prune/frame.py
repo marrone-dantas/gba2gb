@@ -71,7 +71,7 @@ def sp_offsets(ssa):
 
 
 class Frame:
-    def __init__(self, ssa, entry_abi="aapcs", skip_lr=True):
+    def __init__(self, ssa, entry_abi="aapcs", skip_lr=True, trim=True):
         self.ssa = ssa
         self.skip_lr = skip_lr
         self.entry_abi = entry_abi
@@ -80,6 +80,7 @@ class Frame:
         self.skip_push = {}   # push addr -> set of regs not written
         self.skip_pop = {}    # pop addr -> set of regs not loaded
         self._slots()
+        self.trim = frame_trims(ssa, self.off) if trim else {}  # addr -> new sp immediate
 
     def live_at_return(self, func):
         lr = () if self.skip_lr else (14,)
@@ -164,3 +165,144 @@ class Frame:
                     self.skip_push.setdefault(a, set()).add(r)
                 for a, r, _ in rs:
                     self.skip_pop.setdefault(a, set()).add(r)
+
+
+# ---------------------------------------------------------------- item 3: relayout
+def pointer_intervals(ssa, off, cap=40):
+    """Value -> (lo, hi) offset interval from the entry SP for SP-derived pointers,
+    including `add rX, ptr, rY` with a proven unsigned range of rY. Values whose
+    interval does not stabilize within `cap` rounds (pointer induction loops) are
+    dropped, which makes their uses escapes."""
+    iv = {v: (o, o) for v, o in off.items()}
+    rounds = {}
+    changed = True
+    while changed:
+        changed = False
+        for v in ssa.values:
+            n = None
+            if v.kind == "pi" and v.env["x"] in iv:
+                n = iv[v.env["x"]]
+            elif v.kind == "phi":
+                args = list(v.args.values())
+                if args and all(a in iv for a in args):
+                    n = (min(iv[a][0] for a in args), max(iv[a][1] for a in args))
+            elif v.kind == "ins" and v.reg == v.ins.rd and v.ins.op in ("add", "sub", "mov") and v.reg != 13:
+                x = v.ins
+                a = v.env.get(int(x.a[1:])) if isinstance(x.a, str) else None
+                b = v.env.get(int(x.b[1:])) if isinstance(x.b, str) else x.b
+                if x.op == "mov" and a in iv:
+                    n = iv[a]
+                elif x.op in ("add", "sub") and a in iv:
+                    if isinstance(b, int):
+                        d = b if x.op == "add" else -b
+                        n = (iv[a][0] + d, iv[a][1] + d)
+                    elif b is not None and b not in iv and b.proven:
+                        lo, hi = b.proven[0], b.proven[1]
+                        n = (iv[a][0] + lo, iv[a][1] + hi) if x.op == "add" else (iv[a][0] - hi, iv[a][1] - lo)
+                elif x.op == "add" and isinstance(b, ra.Value) and b in iv and a is not None and a not in iv and a.proven:
+                    n = (iv[b][0] + a.proven[0], iv[b][1] + a.proven[1])
+            if n is not None and iv.get(v) != n and v not in off:
+                rounds[v] = rounds.get(v, 0) + 1
+                if rounds[v] > cap:
+                    continue
+                if v in iv:
+                    n = (min(n[0], iv[v][0]), max(n[1], iv[v][1]))
+                iv[v] = n
+                changed = True
+    return {v: i for v, i in iv.items() if rounds.get(v, 0) <= cap}
+
+
+WIDTH = {"": 4, "b": 1, "h": 2, "sb": 1, "sh": 2}
+
+
+def frame_trims(ssa, off):
+    """Item 3: escape analysis of the stack frame of every function. When no
+    SP-derived pointer escapes (stored, passed to a call, returned, combined in an
+    untracked way) every access to the locals area has a known offset interval;
+    padding at the top of the locals area (`sub sp, #N`) that no access can reach is
+    removed by shrinking N in the prologue and in every matching epilogue
+    `add sp, #N`. Returns {instruction address: new immediate}."""
+    from tools.prune.bitwidth_pruning import live_values
+    iv = pointer_intervals(ssa, off)
+    live = live_values(ssa)
+    out = {}
+    for fa, f in ssa.funcs.items():
+        vals = set(f.values)
+        escape = False
+        acc = []
+        allocs, frees = [], []
+        for v in f.values:  # phi/pi consuming a pointer must themselves be tracked
+            if v in live and v not in iv and (
+                    (v.kind == "phi" and any(a in iv for a in v.args.values())) or
+                    (v.kind == "pi" and v.env["x"] in iv)):
+                escape = True
+        for a, env in f.envs.items():
+            x = ssa.prog.ins[a]
+            ptrs = {r for r, v in env.items() if v in iv}
+            if x.rd == 13 and x.op in ("add", "sub"):
+                d = ssa.defval.get((a, 13))
+                if x.op == "sub" and x.a == "r13" and isinstance(x.b, int):
+                    allocs.append((a, x, env[13], d))
+                elif x.op == "add" and x.a == "r13" and isinstance(x.b, int):
+                    frees.append((a, x, env[13], d))
+                else:
+                    escape = True
+                continue
+            if not ptrs:
+                continue
+            if x.op in ("push", "pop", "pop_ret"):
+                if ptrs - {13}:
+                    escape = True
+                continue
+            if x.mem is not None:
+                base, idx, disp = x.mem
+                if x.op.startswith("str") and x.rd in ptrs:
+                    escape = True
+                    continue
+                n = WIDTH[x.op[3:]]
+                p = [r for r in (base, idx) if r in ptrs]
+                if len(p) != 1:
+                    escape = True
+                    continue
+                other = idx if p[0] == base else base
+                lo, hi = iv[env[p[0]]]
+                if other is not None:
+                    ov = env.get(other)
+                    if ov is None or not ov.proven:
+                        escape = True
+                        continue
+                    lo, hi = lo + ov.proven[0], hi + ov.proven[1]
+                acc.append((lo + disp, hi + disp + n))
+                continue
+            if x.op in ("ldm", "stm"):
+                if ptrs != {x.rd} or (x.op == "stm" and set(x.regs) & ptrs):
+                    escape = True
+                    continue
+                lo, hi = iv[env[x.rd]]
+                acc.append((lo, hi + 4 * len(x.regs)))
+                if x.wb:
+                    escape = escape or ssa.defval.get((a, x.rd)) not in iv
+                continue
+            if x.op in ("cmp", "cmn"):
+                continue
+            if x.op in ("add", "sub", "mov") and ssa.defval.get((a, x.rd)) in iv:
+                continue
+            escape = True
+        if escape or len(allocs) != 1:
+            continue
+        a0, x0, sp_before, sp_after = allocs[0]
+        if sp_before not in off or sp_after not in off:
+            continue
+        B, N = off[sp_before], x0.b
+        if any(off.get(sp0) != B - N or off.get(d) != B or x.b != N for _, x, sp0, d in frees) or not frees:
+            continue
+        if any(lo < B - N or hi > B for lo, hi in acc):
+            continue  # an access outside the locals area (stack arguments...): keep it
+        top = max([hi for _, hi in acc] + [B - N])
+        P = (B - top) // 4 * 4
+        if P <= 0:
+            continue
+        out[a0] = N - P
+        for a, *_ in frees:
+            out[a] = N - P
+    return out

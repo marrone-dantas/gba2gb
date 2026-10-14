@@ -61,3 +61,22 @@ def test_lr_holding_r9_is_kept(tmp_path):
     fr = Frame(ssa)
     second = [a for a, x in ssa.prog.ins.items() if x.op == "push"][1]
     assert second not in fr.skip_push
+
+
+def trims_of(name):
+    from tools.prune.frame import frame_trims
+    ssa = ssa_of(name)
+    ra.analyze(ssa)
+    return frame_trims(ssa, sp_offsets(ssa))
+
+
+def test_frame_trim_padding():
+    # k02: 16 bytes of locals in a 20-byte frame; k18: 8 bytes in 12 (alignment padding)
+    assert sorted(trims_of("k02").values()) == [16, 16]
+    assert sorted(trims_of("k18").values()) == [8, 8]
+
+
+def test_frame_trim_escape_blocks():
+    # k05 walks its array with a pointer induction variable (no bounded interval):
+    # the pointer escapes the analysis, so the frame is kept as is
+    assert trims_of("k05") == {}

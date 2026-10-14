@@ -27,9 +27,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # (name, prune mode, opts) — cumulative; "phase1" is the Phase 1 B3 state
 CONFIGS = [
     ("phase0", None, None),
-    ("phase1", "sound", {"skip_lr": False}),
-    ("+lr", "sound", {"skip_lr": True}),
-    ("+entry", "sound", {"skip_lr": True, "entry_abi": "none"}),
+    ("phase1", "sound", {"skip_lr": False, "frame_trim": False}),
+    ("+lr", "sound", {"skip_lr": True, "frame_trim": False}),
+    ("+frame", "sound", {"skip_lr": True, "frame_trim": True}),
+    ("+entry", "sound", {"skip_lr": True, "frame_trim": True, "entry_abi": "none"}),
 ]
 REG_LO, REG_HI = 0xFF80, 0xFFC0
 
