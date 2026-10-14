@@ -22,7 +22,7 @@ Ver `build/ciclos.csv` após rodar o teste.
 | k09_mul_acc | 7618 | k19_tilemap_hash | 248660 |
 | k10_xorshift | 15880 | k20_fixed_point | 43757 |
 
-Média geral ≈ 38 000 M-cycles (≈ 2,2 quadros de 17 556 M-cycles).
+Média geral ≈ 36 400 M-cycles (≈ 2,2 quadros de 17 556 M-cycles).
 
 ## Limitações conhecidas
 - Todo `BX` e `POP {..,PC}` é tratado como retorno (`ret` SM83); não há saltos indiretos,
