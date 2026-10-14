@@ -40,6 +40,7 @@ class Ins:
     wb: bool = False
     cond: str | None = None
     target: int | None = None
+    lit: int | None = None
 
     @property
     def is_term(self):
@@ -130,6 +131,7 @@ def convert(md, img: Image, i) -> Ins:
         if mn == "ldr" and m[0] == 15:
             lit = ((i.address + 4) & ~3) + m[2]
             ins.op, ins.rd, ins.a = "mov", rd, img.word(lit)
+            ins.lit = lit  # literal-pool address (used by Q-format requantization)
             return ins
         ins.rd, ins.mem = rd, m
         return ins

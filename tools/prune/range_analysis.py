@@ -495,7 +495,11 @@ WIDEN_AFTER = 3
 GIVE_UP = 40
 
 
-def analyze(ssa: SSAProgram):
+def analyze(ssa: SSAProgram, assume: dict | None = None):
+    """Worklist interval propagation. `assume` maps Value -> range that is
+    intersected into the value (used by profile-guided pruning; every assumed
+    value must be protected by a runtime guard)."""
+    assume = assume or {}
     users = {v: [] for v in ssa.values}
     for v in ssa.values:
         for d in list(v.env.values()) + list(v.args.values()) + list(v.links or []):
@@ -510,6 +514,8 @@ def analyze(ssa: SSAProgram):
         new = norm(transfer(v))
         if new is not None and (new[0] > new[1] or new[2] > new[3]):
             new = None
+        if new is not None and v in assume:
+            new = meet(new, assume[v])
         old = v.proven
         if new == old:
             continue
