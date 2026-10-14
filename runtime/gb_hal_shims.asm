@@ -98,6 +98,10 @@ wAffDst:: ds 2
 SECTION "hal_state2", WRAMX[$D344]
 wPalDirty:: ds 1
 wComposeN:: ds 2
+wRejInval:: ds 1               ; Phase P1: a tile gained opaque pixels
+wAnyDirty:: ds 1               ; Phase P1: some object changed since the last compose
+wLastCamX: ds 1
+wLastCamY: ds 1
 wOamDirty:: ds 1
 wBgW:: ds 16                  ; BG tiles written (bitmap, tile shadow)
 wObjW:: ds 32                 ; OBJ tiles written
@@ -142,6 +146,9 @@ HalStart:
     ld hl, $D400
     ld bc, $0400
     call MemClear                 ; GBA OAM mirror (128 objects)
+    ld hl, wObjState
+    ld bc, 128
+    call MemClear                 ; per-object state (Phase P1)
     call AffInit                  ; pre-rotated affine frames (LCD off; stub if unused)
     xor a
     ldh [$FF26], a                ; APU off, like SOUNDCNT_X at GBA reset
@@ -433,15 +440,41 @@ Compose::
     inc hl
     inc [hl]
 .cn:
+    ld a, [wRejInval]
+    or a
+    call nz, RejInval
     ld a, [wPalDirty]
     or a
     call nz, Reconvert
-    xor a
-    ld [wDropped], a
-    ld [wUsed], a
     ld a, [GbaView]
     or a
-    call nz, CamUpdate
+    jr z, .full
+    call CamUpdate
+    ; Phase P1 (camera mode): nothing changed since the last compose -> the shadow
+    ; OAM already shows this logic tick; commit it without recomposing
+    ld a, [wAnyDirty]
+    ld hl, wDropped
+    or [hl]
+    ld hl, wRotBase
+    or [hl]
+    jr nz, .full
+    ld a, [wCamX]
+    ld hl, wLastCamX
+    cp [hl]
+    jr nz, .full
+    ld a, [wCamY]
+    ld hl, wLastCamY
+    cp [hl]
+    ret z
+.full:
+    ld a, [wCamX]
+    ld [wLastCamX], a
+    ld a, [wCamY]
+    ld [wLastCamY], a
+    xor a
+    ld [wAnyDirty], a
+    ld [wDropped], a
+    ld [wUsed], a
     ld de, wShadowOAM
     ld a, [GbaView]
     or a
@@ -458,6 +491,12 @@ Compose::
     ld a, b
     inc a
     ld [wObjI], a
+    ld h, HIGH(wObjState)         ; Phase P1: clean object with a cached rejection
+    ld l, b
+    ld a, [hl]
+    and 6
+    cp 4
+    jr z, .lo
     call CObj
     jr .lo
 .cam:
@@ -476,6 +515,12 @@ Compose::
     ld [wObjI], a
     ld a, 1
     ld [wPinned], a
+    ld h, HIGH(wObjState)         ; Phase P1: clean object with a cached rejection
+    ld l, b
+    ld a, [hl]
+    and 6
+    cp 4
+    jr z, .pin
     call CObj
     jr .pin
 .pd:
@@ -484,6 +529,40 @@ Compose::
     ld [wObjK], a
     ld a, [wUsed]
     ld [wUsedPin], a
+    ld a, [wRotBase]
+    or a
+    jr nz, .rk
+    ; Phase P1: no rotation in effect -> objects 0 .. n-1 in a tight scan
+    ld b, 0
+.f0:
+    ld a, [wObjMax]
+    cp b
+    jr z, .rot
+    ld h, HIGH(wObjState)
+    ld l, b
+    ld a, [hl]
+    rrca
+    jr nc, .f1                    ; never stored
+    and 3
+    cp 2
+    jr z, .f1                     ; clean + cached rejection
+    ld a, [GbaPinLo]
+    ld c, a
+    ld a, b
+    cp c
+    jr c, .f2
+    ld a, [GbaPinHi]
+    ld c, a
+    ld a, b
+    cp c
+    jr c, .f1                     ; pinned: already drawn
+.f2:
+    push bc
+    call CObj
+    pop bc
+.f1:
+    inc b
+    jr .f0
 .rk:
     ld a, [wObjK]
     ld b, a
@@ -518,8 +597,12 @@ Compose::
 .np:
     ld h, HIGH(wObjState)         ; skip objects that were never stored
     ld l, b
-    bit 0, [hl]
+    ld a, [hl]
+    bit 0, a
     jr z, .rk
+    and 6
+    cp 4
+    jr z, .rk                     ; Phase P1: clean object with a cached rejection
     call CObj
     jr .rk
 .rot:
@@ -560,8 +643,43 @@ Compose::
     inc de
     jr .done
 .fin:
+    ld hl, wObjState              ; Phase P1: everything composed is clean now
+    ld a, [wObjMax]
+    or a
+    jr z, .cd
+    ld b, a
+.cl:
+    res 1, [hl]
+    inc l
+    dec b
+    jr nz, .cl
+.cd:
     ld a, 1
     ld [wDmaReady], a
+    ret
+
+RejInval:
+    ld a, 1
+    ld [wAnyDirty], a             ; previously rejected objects may be visible now
+    xor a
+    ld [wRejInval], a
+    ld hl, wObjState
+    ld b, 128
+.l:
+    res 2, [hl]
+    inc l
+    dec b
+    jr nz, .l
+    ret
+
+; Phase P1: CObj rejected the object on its attributes alone (hidden, tile >= 256,
+; never-opaque tile): cache it (state bit 2) so later composes skip it in O(1)
+; until the object is stored again (dirty) or a tile gains opaque pixels.
+CObjRej:
+    ld a, [wCurObj]
+    ld l, a
+    ld h, HIGH(wObjState)
+    set 2, [hl]
     ret
 
 ; one GBA object (index b) -> hardware sprites at de
@@ -582,7 +700,7 @@ CObj:
     ld b, a
     and $03
     cp $02
-    ret z                         ; hidden
+    jp z, CObjRej                   ; hidden
     ld a, [GbaView]
     or a
     jr z, .vis
@@ -607,7 +725,7 @@ CObj:
     pop de
     pop hl
     or a
-    ret z
+    jp z, CObjRej
 .vis:
     ld a, b
     and $01
@@ -690,12 +808,12 @@ CObj:
     pop hl
     pop de
     or a
-    ret z                         ; tile never had an opaque pixel: nothing to draw
+    jp z, CObjRej                   ; tile never had an opaque pixel: nothing to draw
 .tnz:
     ld a, [hl]
     ld b, a
     and $03
-    ret nz                        ; tile >= 256: not converted (docs/hal.md)
+    jp nz, CObjRej                  ; tile >= 256: not converted (docs/hal.md)
     ld a, b
     and $F0
     jr z, .p0
@@ -1415,7 +1533,13 @@ HAL_VRAM_STORE16::
     ld h, 0
     ld bc, wTileNZ
     add hl, bc
+    ld a, [hl]
+    or a
+    jr nz, .nzk
     ld [hl], 1
+    ld a, 1
+    ld [wRejInval], a             ; Phase P1: cached object rejections are stale
+.nzk:
     pop de
 .z:
     ld a, 15                      ; tile shadow: SRAM bank 15
@@ -1765,8 +1889,14 @@ HAL_DYN_ADDR::
     ld l, a
     ret
 
-; Phase P1: a = GBA object index -> mark live + dirty, extend wObjMax, request a
-; compose. Preserves bc, de, hl.
+; Phase P1: a = GBA object index -> mark live (MarkLive) or live + dirty (MarkObj),
+; extend wObjMax, request a compose. Preserves bc, de, hl.
+MarkLive::
+    push hl
+    ld l, a
+    ld h, HIGH(wObjState)
+    set 0, [hl]
+    jr MarkObj.max
 MarkObj::
     push hl
     ld l, a
@@ -1774,6 +1904,10 @@ MarkObj::
     ld a, [hl]
     or 3
     ld [hl], a
+    ld a, 1
+    ld [wAnyDirty], a
+    ld a, l
+.max:
     ld a, l
     inc a
     ld h, a
@@ -1787,6 +1921,8 @@ MarkObj::
     ld [wOamDirty], a
     pop hl
     ret
+
+
 
 ; Phase P1 idiom -> HAL (tools/lift/idioms.py "objsetpos"): obj_set_pos(r0 = obj,
 ; r1 = x, r2 = y): attr0 = (attr0 & ~$FF) | (y & $FF), attr1 = (attr1 & ~$1FF) | (x & $1FF).
@@ -1803,18 +1939,33 @@ NAT_objsetpos::
     and 3
     or HIGH(wGbaOAM)
     ld h, a
+    ld c, 0                       ; c != 0: a byte changed
     ldh a, [HR_R2]
-    ld [hl+], a                   ; attr0 low = y
+    cp [hl]
+    jr z, .s0
+    ld [hl], a                    ; attr0 low = y
+    inc c
+.s0:
+    inc hl
     inc hl
     ldh a, [HR_R1]
-    ld [hl+], a                   ; attr1 low = x
+    cp [hl]
+    jr z, .s1
+    ld [hl], a                    ; attr1 low = x
+    inc c
+.s1:
+    inc hl
     ldh a, [HR_R1 + 1]
     and 1
     ld b, a
     ld a, [hl]
     and $FE
     or b
+    cp [hl]
+    jr z, .s2
     ld [hl], a                    ; attr1 high
+    inc c
+.s2:
     ldh [HR_R3 + 1], a
     ldh a, [HR_R1]
     ldh [HR_R3], a
@@ -1829,6 +1980,19 @@ NAT_objsetpos::
     rra
     srl h
     rra
+    inc c
+    dec c
+    jr z, .unch
+    ; position bytes only: an object rejected on its attributes (hidden, tile; see
+    ; CObjRej) stays rejected, so it needs no recompose either
+    ld l, a
+    ld h, HIGH(wObjState)
+    bit 2, [hl]
+    jr z, .chg
+.unch:
+    call MarkLive                 ; no recompose needed for this object
+    jr .regs
+.chg:
     call MarkObj
     jr .regs
 .slow:
@@ -1948,11 +2112,33 @@ HAL_DYN_STORE::
     rra
     srl h
     rra
-    call MarkObj
+    push af                       ; object index
     ldh a, [HR_T1 + 1]
     and $03
     or HIGH(wGbaOAM)
-    jr .hl
+    ld h, a
+    ldh a, [HR_T1]
+    ld l, a
+    ld d, 0                       ; d != 0: a byte changed (Phase P1 dirty tracking)
+.oc:
+    ldh a, [c]
+    cp [hl]
+    jr z, .os
+    ld [hl], a
+    inc d
+.os:
+    inc hl
+    inc c
+    dec e
+    jr nz, .oc
+    inc d
+    dec d
+    jr nz, .och
+    pop af
+    jp MarkLive
+.och:
+    pop af
+    jp MarkObj
 .ew:
     call HAL_EW_SETBANK
     ldh a, [HR_T1 + 1]

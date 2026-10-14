@@ -235,10 +235,22 @@ class NarrowGen(Gen):
 
     def alu(self, x, op, w, ext):
         rd = R(x.rd)
-        A = self.opnd(x, x.a, w, T2)
-        B = self.opnd(x, x.b, w, T1)
         mn = {"add": ("add", "adc"), "sub": ("sub", "sbc"), "and": ("and", "and"),
               "orr": ("or", "or"), "eor": ("xor", "xor"), "bic": ("and", "and")}[op]
+        if isinstance(x.b, int) and not isinstance(x.a, int):
+            # Phase P1: immediate operand -> SM83 immediate forms (no T1 staging)
+            A = self.opnd(x, x.a, w, T2)
+            c = (~x.b if op == "bic" else x.b) & 0xFFFFFFFF
+            for i in range(w):
+                self.e(f"ldh a, [{h(A + i)}]", f"{mn[0] if i == 0 else mn[1]} a, ${(c >> 8 * i) & 0xFF:02X}",
+                       f"ldh [{h(rd + i)}], a")
+            self.defined(x, x.rd, w)
+            if x.s:
+                self.nz(rd, w, ext)
+            self.stats["narrow_ops"] += 1
+            return
+        A = self.opnd(x, x.a, w, T2)
+        B = self.opnd(x, x.b, w, T1)
         self.e(f"ld hl, {h(B)}")
         for i in range(w):
             if op == "bic":
@@ -448,13 +460,19 @@ class NarrowGen(Gen):
                 self.ensure(x, idx, 2)
                 B = R(idx)
             else:
-                B = T1
-                self.e(f"ld a, ${disp & 0xFF:02X}", f"ldh [{h(T1)}], a",
-                       f"ld a, ${(disp >> 8) & 0xFF:02X}", f"ldh [{h(T1 + 1)}], a")
-            self.e(f"ldh a, [{h(R(base))}]", f"ld hl, {h(B)}", "add a, [hl]", f"ldh [{h(T1)}], a",
-                   f"ldh a, [{h(R(base) + 1)}]", "inc l", "adc a, [hl]", f"ldh [{h(T1 + 1)}], a")
-            ad = T1
-        self.hl_from(ad)
+                B = None
+            if B is None:
+                # Phase P1: base + immediate straight into hl ($C000 | low 12 bits)
+                self.e(f"ldh a, [{h(R(base))}]", f"add a, ${disp & 0xFF:02X}", "ld l, a",
+                       f"ldh a, [{h(R(base) + 1)}]", f"adc a, ${(disp >> 8) & 0xFF:02X}",
+                       "and $0F", "or $C0", "ld h, a")
+                ad = None
+            else:
+                self.e(f"ldh a, [{h(R(base))}]", f"ld hl, {h(B)}", "add a, [hl]", f"ldh [{h(T1)}], a",
+                       f"ldh a, [{h(R(base) + 1)}]", "inc l", "adc a, [hl]", f"ldh [{h(T1 + 1)}], a")
+                ad = T1
+        if ad is not None:
+            self.hl_from(ad)
         n = {"": 4, "b": 1, "h": 2, "sb": 1, "sh": 2}[x.op[3:]]
         rd = R(x.rd)
         if x.op.startswith("str"):
