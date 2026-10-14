@@ -4,3 +4,5 @@ pyboy
 networkx
 pytest
 pyelftools
+numpy
+pillow
