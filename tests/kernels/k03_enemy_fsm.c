@@ -1,4 +1,4 @@
-/* Máquina de estados de inimigo: patrulha/persegue/ataca/foge por 16 passos */
+/* Enemy state machine: patrol/chase/attack/flee for 16 steps */
 int f(int r0,int r1,int r2,int r3){ int st=r0&3, x=r1&255, px=r2&255, hp=(r3&31)+1, i;
  for(i=0;i<16;i++){ int d=px-x; if(d<0)d=-d;
   if(st==0){ x+=(i&4)?1:-1; if(d<40)st=1; }

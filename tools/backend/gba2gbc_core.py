@@ -1,6 +1,6 @@
 """CLI gba2gbc-core: ELF/bin Thumb -> ROM .gbc (MBC5) via RGBDS.
 
-Uso: python -m tools.backend.gba2gbc_core kernel.elf -o kernel.gbc [--asm saida.asm]"""
+Usage: python -m tools.backend.gba2gbc_core kernel.elf -o kernel.gbc [--asm out.asm]"""
 import argparse
 import os
 import subprocess
@@ -41,7 +41,7 @@ def main(argv=None):
     ap.add_argument("--asm")
     a = ap.parse_args(argv)
     p = build(a.input, a.output, a.entry, a.asm)
-    print(f"{a.output}: {len(p.ins)} instruções Thumb traduzidas")
+    print(f"{a.output}: {len(p.ins)} Thumb instructions translated")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,9 @@
-"""Frontend da Fase 0: decodifica Thumb (ARM7TDMI) com Capstone, monta o CFG
-(NetworkX) e produz uma IR simples (uma instrução IR por instrução Thumb).
+"""Phase 0 frontend: decodes Thumb (ARM7TDMI) with Capstone, builds the CFG
+(NetworkX) and produces a simple IR (one IR instruction per Thumb instruction).
 
-A decodificação é recursiva a partir dos pontos de entrada (símbolos FUNC e
-alvos de BL), o que evita decodificar literal pools como código. Cargas
-relativas ao PC (`ldr rX, [pc, #imm]`) são resolvidas estaticamente para
-constantes (op ``movi``)."""
+Decoding is recursive from the entry points (FUNC symbols and BL targets),
+which avoids decoding literal pools as code. PC-relative loads
+(`ldr rX, [pc, #imm]`) are statically resolved to constants (``mov`` op)."""
 from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
@@ -23,11 +22,11 @@ class LiftError(Exception):
 
 @dataclass
 class Ins:
-    """Instrução da IR.
-    op: mnemônico normalizado (sem sufixo 's', sem '.n'/'.w');
-    s: atualiza flags; rd: destino; a/b: operandos ('r<n>' ou int imediato);
-    mem: (base, index|None, disp) para LDR/STR; regs: lista para PUSH/POP/LDM/STM;
-    cond: condição de Bcc; target: alvo de desvio."""
+    """IR instruction.
+    op: normalized mnemonic (no 's' suffix, no '.n'/'.w');
+    s: updates flags; rd: destination; a/b: operands ('r<n>' or int immediate);
+    mem: (base, index|None, disp) for LDR/STR; regs: list for PUSH/POP/LDM/STM;
+    cond: Bcc condition; target: branch target."""
     addr: int
     size: int
     op: str
@@ -86,7 +85,7 @@ def _opnd(md, o):
     if o.type == A.ARM_OP_MEM:
         idx = _reg(md, o.mem.index) if o.mem.index else None
         return ("m", (_reg(md, o.mem.base), idx, o.mem.disp))
-    raise LiftError(f"operando desconhecido {o.type}")
+    raise LiftError(f"unknown operand {o.type}")
 
 
 def convert(md, img: Image, i) -> Ins:
@@ -100,7 +99,7 @@ def convert(md, img: Image, i) -> Ins:
         if mn == "pop" and 15 in ins.regs:
             ins.regs.remove(15)
             if ins.regs:
-                # pop {regs, pc}: emitido como pop + ret
+                # pop {regs, pc}: emitted as pop + ret
                 ins.op = "pop_ret"
             else:
                 ins.op = "ret"
@@ -112,7 +111,7 @@ def convert(md, img: Image, i) -> Ins:
         ins.wb = i.writeback or "!" in i.op_str
         return ins
     if mn == "bx":
-        ins.op = "ret"  # Fase 0: todo BX é tratado como retorno
+        ins.op = "ret"  # Phase 0: every BX is treated as a return
         return ins
     if mn == "bl":
         ins.op, ins.target = "bl", ops[0][1]
@@ -134,7 +133,7 @@ def convert(md, img: Image, i) -> Ins:
             return ins
         ins.rd, ins.mem = rd, m
         return ins
-    # ALU / dados
+    # ALU / data processing
     flag_ops = {"movs": "mov", "mvns": "mvn", "adds": "add", "subs": "sub", "ands": "and",
                 "eors": "eor", "orrs": "orr", "bics": "bic", "lsls": "lsl", "lsrs": "lsr",
                 "asrs": "asr", "rors": "ror", "adcs": "adc", "sbcs": "sbc", "muls": "mul",
@@ -146,7 +145,7 @@ def convert(md, img: Image, i) -> Ins:
     elif mn in ("mov", "add", "sub", "adr"):
         pass
     else:
-        raise LiftError(f"instrução não suportada: {ins.text} @ {i.address:#x}")
+        raise LiftError(f"unsupported instruction: {ins.text} @ {i.address:#x}")
     ins.op = base
     if base == "adr":
         ins.op, ins.rd, ins.a = "mov", ops[0][1], ((i.address + 4) & ~3) + ops[1][1]
@@ -168,12 +167,12 @@ def convert(md, img: Image, i) -> Ins:
         if ins.a == "r15" and isinstance(ins.b, int):  # add rd, pc, #imm
             ins.op, ins.a, ins.b = "mov", ((i.address + 4) & ~3) + ins.b, None
         else:
-            raise LiftError(f"uso de PC não suportado: {ins.text}")
+            raise LiftError(f"unsupported use of PC: {ins.text}")
     return ins
 
 
 class Program:
-    """Resultado do lifting: instruções por endereço, funções e CFG."""
+    """Lifting result: instructions by address, functions and CFG."""
 
     def __init__(self, img: Image, entry="f"):
         self.img = img
@@ -189,10 +188,10 @@ class Program:
     def _decode_one(self, addr):
         o = addr - self.img.base
         if not 0 <= o < len(self.img.data):
-            raise LiftError(f"endereço fora da imagem: {addr:#x}")
+            raise LiftError(f"address outside the image: {addr:#x}")
         i = next(self.md.disasm(self.img.data[o:o + 4], addr, 1), None)
         if i is None:
-            raise LiftError(f"falha ao decodificar em {addr:#x}")
+            raise LiftError(f"failed to decode at {addr:#x}")
         return convert(self.md, self.img, i)
 
     def _decode(self):
@@ -247,7 +246,7 @@ def lift_file(path, entry="f"):
 if __name__ == "__main__":
     import sys
     p = lift_file(sys.argv[1])
-    print(f"{len(p.ins)} instruções, {p.cfg.number_of_nodes()} blocos, funções: "
+    print(f"{len(p.ins)} instructions, {p.cfg.number_of_nodes()} blocks, functions: "
           + ", ".join(hex(f) for f in sorted(p.funcs)))
     for x in p.ordered():
         tag = "L:" if x.addr in p.leaders else "  "

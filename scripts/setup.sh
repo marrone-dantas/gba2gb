@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala o toolchain da Fase 0: venv Python, arm-none-eabi-gcc e RGBDS.
+# Installs the Phase 0 toolchain: Python venv, arm-none-eabi-gcc and RGBDS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RGBDS_VER="${RGBDS_VER:-v1.0.4}"
@@ -10,11 +10,11 @@ fi
 
 if ! command -v rgbasm >/dev/null; then
   if ! (sudo apt-get install -y rgbds 2>/dev/null); then
-    # Release binária oficial (gbdev/rgbds)
+    # Official binary release (gbdev/rgbds)
     tmp=$(mktemp -d)
     curl -fsSL -o "$tmp/rgbds.tar.xz" \
       "https://github.com/gbdev/rgbds/releases/download/${RGBDS_VER}/rgbds-linux-x86_64.tar.xz"
-    # python em vez de tar -J: a box pode não ter xz-utils
+    # python instead of tar -J: the machine may lack xz-utils
     python3 -c "import tarfile,sys;tarfile.open(sys.argv[1]).extractall(sys.argv[2],filter='data')" "$tmp/rgbds.tar.xz" "$tmp"
     sudo install -m755 "$tmp"/rgbasm "$tmp"/rgblink "$tmp"/rgbfix "$tmp"/rgbgfx /usr/local/bin/
   fi

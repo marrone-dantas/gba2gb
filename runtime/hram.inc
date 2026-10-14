@@ -1,5 +1,5 @@
-; runtime/hram.inc — mapa da HRAM usada pelo código SM83 gerado (ver docs/mapa_hram.md)
-; Registradores ARM R0..R15: 4 bytes cada, little-endian, em $FF80-$FFBF.
+; runtime/hram.inc — HRAM map used by the generated SM83 code (see docs/hram_map.md)
+; ARM registers R0..R15: 4 bytes each, little-endian, at $FF80-$FFBF.
 DEF HR_R0  EQU $FF80
 DEF HR_R1  EQU $FF84
 DEF HR_R2  EQU $FF88
@@ -15,20 +15,20 @@ DEF HR_R11 EQU $FFAC
 DEF HR_R12 EQU $FFB0
 DEF HR_SP  EQU $FFB4   ; R13
 DEF HR_LR  EQU $FFB8   ; R14
-DEF HR_PC  EQU $FFBC   ; R15 (não mantido em tempo de execução; reservado)
-; Flags do CPSR, um byte cada (0 ou 1)
+DEF HR_PC  EQU $FFBC   ; R15 (not maintained at run time; reserved)
+; CPSR flags, one byte each (0 or 1)
 DEF HR_FN  EQU $FFC0
 DEF HR_FZ  EQU $FFC1
 DEF HR_FC  EQU $FFC2
 DEF HR_FV  EQU $FFC3
-; Temporários de 32 bits do backend
+; Backend 32-bit temporaries
 DEF HR_T0  EQU $FFC4
 DEF HR_T1  EQU $FFC8
 DEF HR_T2  EQU $FFCC
-; Controle do harness (teste lockstep)
-DEF HR_START EQU $FFD0 ; harness escreve 1 para iniciar o kernel
-DEF HR_DONE  EQU $FFD1 ; runtime escreve 1 no fim (marcador de fim)
-DEF HR_TCNT  EQU $FFD2 ; contador de overflows do timer (16 bits LE)
-DEF HR_TIMA  EQU $FFD4 ; TIMA amostrado no fim
-; Memória ARM emulada: endereço ARM -> $C000 | (addr & $1FFF) (WRAM de 8 KiB)
-; Pilha SM83 nativa: começa em $D000 e cresce para baixo.
+; Harness control (lockstep test)
+DEF HR_START EQU $FFD0 ; harness writes 1 to start the kernel
+DEF HR_DONE  EQU $FFD1 ; runtime writes 1 at the end (end marker)
+DEF HR_TCNT  EQU $FFD2 ; timer overflow counter (16-bit LE)
+DEF HR_TIMA  EQU $FFD4 ; TIMA sampled at the end
+; Emulated ARM memory: ARM address -> $C000 | (addr & $1FFF) (8 KiB WRAM)
+; Native SM83 stack: starts at $D000 and grows downward.

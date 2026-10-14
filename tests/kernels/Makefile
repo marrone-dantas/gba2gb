@@ -1,4 +1,4 @@
-# Compila os micro-kernels para Thumb (ARM7TDMI), sem libc/libgcc.
+# Builds the micro-kernels for Thumb (ARM7TDMI), without libc/libgcc.
 CC=arm-none-eabi-gcc
 CFLAGS=-mcpu=arm7tdmi -mthumb -O2 -ffreestanding -nostdlib -fno-builtin -fno-jump-tables -fno-pic
 OUT=../../build/kernels

@@ -1,6 +1,6 @@
-; runtime/runtime.asm — runtime mínimo da Fase 0 (ROM0)
-; Laço do harness: espera START, chama KernelEntry, sinaliza DONE.
-; Também contém as rotinas auxiliares de 32 bits usadas pelo código gerado.
+; runtime/runtime.asm — minimal Phase 0 runtime (ROM0)
+; Harness loop: waits for START, calls KernelEntry, signals DONE.
+; Also contains the 32-bit helper routines used by the generated code.
 INCLUDE "hram.inc"
 
 DEF rTIMA EQU $FF05
@@ -25,7 +25,7 @@ Start:
     ldh [HR_START], a
     ldh [HR_DONE], a
     ldh [rTMA], a
-    ld a, $05            ; timer ligado, 262144 Hz (1 tick = 4 M-cycles)
+    ld a, $05            ; timer on, 262144 Hz (1 tick = 4 M-cycles)
     ldh [rTAC], a
     ld a, $04
     ldh [rIE], a
@@ -46,7 +46,7 @@ Start:
     di
     ldh [HR_TIMA], a
     ld a, 1
-    ldh [HR_DONE], a     ; marcador de fim
+    ldh [HR_DONE], a     ; end marker
     jr .wait
 
 TimerISR:
@@ -84,7 +84,7 @@ NZ_T0::
     ldh [HR_FZ], a
     ret
 
-; V_ADD: d = byte alto de A, e = byte alto de B, resultado em T0
+; V_ADD: d = high byte of A, e = high byte of B, result in T0
 V_ADD::
     ldh a, [HR_T0+3]
     xor d
@@ -110,15 +110,15 @@ V_SUB::
     ldh [HR_FV], a
     ret
 
-; ---- deslocamentos sobre T0, quantidade em b ---------------------------
-; Atualizam C só se b != 0 (semântica ARM de deslocamento por registrador).
+; ---- shifts on T0, amount in b ----------------------------------------
+; Update C only if b != 0 (ARM register-shift semantics).
 SH_LSL::
     ld a, b
     or a
     ret z
     cp 34
     jr c, .ok
-    ld b, 33             ; 33 passos já zeram tudo e dão C=0
+    ld b, 33             ; 33 steps already clear everything and give C=0
 .ok:
     ld hl, HR_T0
 .lp:
@@ -162,7 +162,7 @@ SH_ASR::
     ret z
     cp 33
     jr c, .ok
-    ld b, 32             ; >=32: todos os bits = sinal, C = sinal
+    ld b, 32             ; >=32: all bits = sign, C = sign
 .ok:
     ld hl, HR_T0+3
 .lp:
@@ -207,7 +207,7 @@ StoreC:
     ldh [HR_FC], a
     ret
 
-; ---- MUL: T0 = T1 * T2 (32 bits baixos); destrói T1, T2 ----------------
+; ---- MUL: T0 = T1 * T2 (low 32 bits); clobbers T1, T2 ----------------
 MUL32::
     xor a
     ldh [HR_T0], a
@@ -216,7 +216,7 @@ MUL32::
     ldh [HR_T0+3], a
     ld c, 32
 .lp:
-    ; T2 >>= 1, bit que sai em carry
+    ; T2 >>= 1, shifted-out bit goes to carry
     ld hl, HR_T2+3
     srl [hl]
     dec l
