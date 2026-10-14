@@ -92,3 +92,37 @@ Known limits: performance (see B4) — a gameplay iteration of Snek costs ~10 GB
 frames, because every iteration walks all 64 body slots (float copies,
 `set_obj_pos` through dynamic pointers). The game scales movement by the elapsed
 timer value, so it plays at the right speed but at ~6 updates per second.
+
+## B4: long bot run and state comparison
+
+`python -m tools.slice.snek_bot 36000` (PyBoy, `cgb=False`, build at d34fdf3).
+A greedy bot steers toward the frog and restarts with START after DEAD.
+
+| metric | value |
+|---|---|
+| GB frames run | 36,000 (full target, 10 min of DMG time) |
+| games / deaths | 20 / 19, max score 3 |
+| KEYINPUT reads (game-loop iterations) | 2,863 (~12.6 GB frames per iteration) |
+| lag frames (no compose) | 33,163 / 36,000 = **92.1 %** (title 79.7 %, game 92.8 %, dead 74.0 %) |
+| crashes (PC >= $8000 or SP outside $D800-$E000) | 0; native stack low-water $DFE8 |
+| Unicorn replay of the GB-read KEYINPUT/TM0D/TM1D | **2,863 / 2,863 g_state snapshots identical** (sha256 prefix 4cbd8e0af124a88e on both sides) |
+
+The reference runs the original Thumb build in Unicorn and feeds it, in program
+order, exactly the key and timer values the GB build read, so the comparison
+covers positions, floats, score, the rand-driven frog and pointers. The only
+non-matching counter is one extra timer read by the reference after the last
+KEYINPUT (end of the replay, not compared).
+
+Images: `docs/img/snek_side_by_side.png` (GBA via Unicorn at the same KEYINPUT
+index | DMG at GB frames 120/700/1500; the DMG is still in LCD-off init at frame
+120), `docs/img/snek_ref_vs_dmg.png` (mGBA reference `snek_gba_ref.png` | DMG
+gameplay) and `docs/img/snek_dmg.gif` (GB frames 400-1600, every 4th frame;
+identical frames merged).
+
+Lag: game-loop iterations take ~3 GB frames when the snake does not step and
+~13 when it does (64 body objects repositioned: ~600 run-time dispatched OAM
+stores, 130 float->int conversions, then a 76-object compose of ~91k T-cycles).
+Because Snek scales movement by the measured timer delta, game speed in
+wall-clock time is preserved; only the display update rate (~5 Hz) is low.
+Next steps: compile-time OAM resolution for the body array (avoid HAL_DYN_*),
+incremental compose (only objects stored since the last compose).
