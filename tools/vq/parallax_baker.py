@@ -24,12 +24,15 @@ from .vq_tile_compiler import luminance, edge_aware_cuts, quantize_thresholds, v
 BANK = 0x4000
 
 
-def layers_from_snapshot(s, far_bg=None):
+def layers_from_snapshot(s, far_bg=None, near=None):
+    """near: optional list of BGs forming the near layer (default: every other visible BG).
+    Near BGs are merged in map space, so they should share one scroll (exclude HUD layers)."""
     bgs, _ = visible_bgs(s)
     prm = {n: bg_params(s, n) for n in bgs}
     if far_bg is None:                                     # lowest priority BG = far
         far_bg = max(bgs, key=lambda n: (prm[n]["prio"], n))
-    near_bgs = sorted((n for n in bgs if n != far_bg), key=lambda n: (prm[n]["prio"], n), reverse=True)
+    cand = [n for n in bgs if n != far_bg] if near is None else list(near)
+    near_bgs = sorted(cand, key=lambda n: (prm[n]["prio"], n), reverse=True)
     _, _, far = render_map(s, far_bg)
     near = None
     solid = None
@@ -46,9 +49,9 @@ def layers_from_snapshot(s, far_bg=None):
     return near, solid, far, prm[near_bgs[-1]]["vofs"], prm[far_bg]["vofs"]
 
 
-def bake(scene, far_bg=None, ratio=0.5, rows=18, k=256, seed=0):
+def bake(scene, far_bg=None, ratio=0.5, rows=18, k=256, seed=0, near_bgs=None):
     s = load(scene) if isinstance(scene, str) else scene
-    near, solid, far, vofs_n, vofs_f = layers_from_snapshot(s, far_bg)
+    near, solid, far, vofs_n, vofs_f = layers_from_snapshot(s, far_bg, near_bgs)
     nh, nw = near.shape[:2]
     fh, fw = far.shape[:2]
     y0 = vofs_n + 8                                        # 144 of the 160 visible rows

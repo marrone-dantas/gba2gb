@@ -2,3 +2,11 @@
 __pycache__/
 build/
 *.pyc
+# commercial ROMs, save states and captured game data never go into the repo
+*.gba
+*.gb.sav
+*.ss0
+*.zip
+*.ppm
+private/
+sma2/
