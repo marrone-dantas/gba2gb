@@ -23,7 +23,7 @@ from tools.lift.defuse import defs
 from tools.profile.seeds import seeds
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SP0 = 0x03001F00
+SP0 = 0x03000F00
 SENTINEL = 0x08F00000
 FORMAT = "gba2gb-range-profile/1"
 UREG = [getattr(U, f"UC_ARM_REG_R{i}") for i in range(13)] + [U.UC_ARM_REG_SP, U.UC_ARM_REG_LR, U.UC_ARM_REG_PC]

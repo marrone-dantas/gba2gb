@@ -6,7 +6,7 @@ Metrics (headless PyBoy, same seeds as the lockstep test):
   * WRAM touched: bytes of $C000-$DFFF written during a call (pattern fill, a few
     seeds; emulated ARM stack + SM83 return addresses);
   * WRAM peak: footprint = span of written bytes of the emulated ARM stack
-    ($D800-$DFFF) + span of the SM83 native stack ($C000-$D7FF);
+    ($C000-$CFFF) + span of the SM83 native stack ($D300-$DFFF);
   * HRAM regs: static count of register-area bytes ($FF80-$FFBF) referenced by the
     generated code, plus the r0-r3 argument bytes and SP;
   * code bytes: size of the "kernel" ROM section.
@@ -69,7 +69,7 @@ def measure(kernel, nseeds, wseeds, configs):
         mp = open(rom + ".map").read()
         code = int(re.search(r'\(\$([0-9a-f]+) bytes\) \["kernel"\]', mp).group(1), 16)
         out[name] = {"mcycles": cyc / len(ss), "ok": ok, "seeds": len(ss), "wram": len(wram),
-                     "wram_peak": span(wram, 0xD800, 0xE000) + span(wram, 0xC000, 0xD800),
+                     "wram_peak": span(wram, 0xC000, 0xD000) + span(wram, 0xD300, 0xE000),
                      "hram": hram_reg_bytes(open(rom[:-4] + ".asm").read()), "code": code}
     return out
 

@@ -45,8 +45,8 @@ class Gen:
         return tmp
 
     def hl_from(self, addr):
-        """hl = $C000 | (valor32[addr] & $1FFF)"""
-        self.e(f"ldh a, [{h(addr + 1)}]", "and $1F", "or $C0", "ld h, a",
+        """hl = $C000 | (value32[addr] & $0FFF)  (docs/memory_map.md)"""
+        self.e(f"ldh a, [{h(addr + 1)}]", "and $0F", "or $C0", "ld h, a",
                f"ldh a, [{h(addr)}]", "ld l, a")
 
     def addsub(self, op, A, B, dst, flags):

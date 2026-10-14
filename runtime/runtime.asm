@@ -20,7 +20,7 @@ SECTION "entry", ROM0[$100]
 SECTION "runtime", ROM0
 Start:
     di
-    ld sp, $D000
+    ld sp, $E000          ; native stack: $D300-$DFFF (docs/memory_map.md)
     xor a
     ldh [HR_START], a
     ldh [HR_DONE], a

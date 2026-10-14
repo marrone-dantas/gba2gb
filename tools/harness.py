@@ -4,7 +4,7 @@ from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB
 from unicorn import arm_const as U
 from elftools.elf.elffile import ELFFile
 
-SP0 = 0x03001F00
+SP0 = 0x03000F00
 SENTINEL = 0x08F00000
 
 

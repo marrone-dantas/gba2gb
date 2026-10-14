@@ -31,5 +31,8 @@ DEF HR_DONE  EQU $FFD1 ; runtime writes 1 at the end (end marker)
 DEF HR_TCNT  EQU $FFD2 ; timer overflow counter (16-bit LE)
 DEF HR_TIMA  EQU $FFD4 ; TIMA sampled at the end
 DEF HR_GUARD EQU $FFD5 ; id of the failed range guard (DONE = 2)
-; Emulated ARM memory: ARM address -> $C000 | (addr & $1FFF) (8 KiB WRAM)
-; Native SM83 stack: starts at $D000 and grows downward.
+; WRAM map (docs/memory_map.md):
+;   $C000-$CFFF emulated ARM memory window: ARM address -> $C000 | (addr & $0FFF)
+;   $D000-$D09F shadow OAM (page-aligned, OAM DMA source)
+;   $D100-$D2FF HAL state (GBA OAM mirror, input, VBlank flags)
+;   $D300-$DFFF native SM83 stack (starts at $E000, grows downward)
