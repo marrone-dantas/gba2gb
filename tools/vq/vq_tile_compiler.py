@@ -95,14 +95,14 @@ def level_centres(y, mode):
     return c
 
 
-def edge_aware_cuts(y, solid, t=0.05, max_bins=96, edge_w=50.0):
+def edge_aware_cuts(y, solid, t=0.05, max_bins=96, edge_w=1000.0):
     """Edge-aware 4-level partition of the scene's luminances (mode "edge", default).
 
     The distinct luminances (binned to at most max_bins) are split into 4 contiguous
     groups (level 0 = brightest) by an exhaustive search over the 3 cut points that
-    minimises  SSE(luminance vs group mean)  +  edge_w * (number of neighbouring pixel
-    pairs touching a solid pixel, differing by more than t, that land in the same
-    group). Pixel art has few colours, so this keeps the outlines of solid tiles.
+    minimises  SSE(luminance vs group mean)  +  edge_w * (edges lost + edges added), counted
+    over neighbouring pixel pairs touching a solid pixel: lost = pair differing by more
+    than t put in the same group, added = pair differing by at most t split by a cut. Pixel art has few colours, so this keeps the outlines of solid tiles.
     -> (thresholds: 3 descending luminance thresholds, centres: 4 group means)."""
     v = y.reshape(-1)
     uq = np.unique(np.round(v, 4))
@@ -120,35 +120,49 @@ def edge_aware_cuts(y, solid, t=0.05, max_bins=96, edge_w=50.0):
     cnt = np.bincount(b.reshape(-1), minlength=n).astype(float)
     sm = np.bincount(b.reshape(-1), y.reshape(-1), n)
     sq = np.bincount(b.reshape(-1), (y * y).reshape(-1), n)
-    P = np.zeros((n, n))
+    P = np.zeros((n, n))                       # visible edges (diff > t)
+    N = np.zeros((n, n))                       # no edge (diff <= t, different bins)
     for a, c2 in ((b[:, :-1], b[:, 1:]), (b[:-1, :], b[1:, :])):
         ya = y[:, :-1] if a.shape[1] != b.shape[1] else y[:-1, :]
         yb = y[:, 1:] if a.shape[1] != b.shape[1] else y[1:, :]
         sa = solid[:, :-1] | solid[:, 1:] if a.shape[1] != b.shape[1] else solid[:-1, :] | solid[1:, :]
-        m = sa & (np.abs(ya - yb) > t)
+        big = np.abs(ya - yb) > t
+        m = sa & big
         np.add.at(P, (a[m], c2[m]), 1)
+        m = sa & ~big & (a != c2)
+        np.add.at(N, (a[m], c2[m]), 1)
     P = P + P.T
+    N = N + N.T
     Pc = np.zeros((n + 1, n + 1))
     Pc[1:, 1:] = P.cumsum(0).cumsum(1)
+    Nc = np.zeros((n + 1, n + 1))
+    Nc[1:, 1:] = N.cumsum(0).cumsum(1)
     C, S, Q = (np.concatenate([[0], a.cumsum()]) for a in (cnt, sm, sq))
 
     def cost(lo, hi):   # bins [lo, hi): vectorised over arrays
         k = C[hi] - C[lo]
         sse = Q[hi] - Q[lo] - np.where(k > 0, (S[hi] - S[lo]) ** 2 / np.maximum(k, 1e-9), 0)
-        viol = (Pc[hi, hi] - Pc[lo, hi] - Pc[hi, lo] + Pc[lo, lo]) / 2
-        return sse + edge_w * viol
+        lost = (Pc[hi, hi] - Pc[lo, hi] - Pc[hi, lo] + Pc[lo, lo]) / 2
+        kept = (Nc[hi, hi] - Nc[lo, hi] - Nc[hi, lo] + Nc[lo, lo]) / 2   # false edges avoided
+        return sse + edge_w * (lost - kept)
 
     best = (np.inf, None)
-    for c1 in range(1, n - 2):
-        for c2 in range(c1 + 1, n - 1):
-            c3 = np.arange(c2 + 1, n)
+    for c1 in range(1, n):                     # empty groups allowed (unused DMG level)
+        for c2 in range(c1, n):
+            c3 = np.arange(c2, n)
             tot = cost(0, c1) + cost(c1, c2) + cost(np.full_like(c3, c2), c3) + cost(c3, np.full_like(c3, n))
             i = int(np.argmin(tot))
             if tot[i] < best[0]:
                 best = (float(tot[i]), (c1, c2, int(c3[i])))
     cuts = best[1]
     bounds = [0, *cuts, n]
-    cen = [(S[bounds[i + 1]] - S[bounds[i]]) / max(C[bounds[i + 1]] - C[bounds[i]], 1e-9) for i in range(4)]
+    cen = [(S[bounds[i + 1]] - S[bounds[i]]) / (C[bounds[i + 1]] - C[bounds[i]])
+           if C[bounds[i + 1]] > C[bounds[i]] else None for i in range(4)]
+    for i in range(4):                         # empty group: midway between neighbours
+        if cen[i] is None:
+            lo = next((cen[j] for j in range(i - 1, -1, -1) if cen[j] is not None), 0.0)
+            hi = next((cen[j] for j in range(i + 1, 4) if cen[j] is not None), 1.0)
+            cen[i] = (lo + hi) / 2
     th = [(uq[c - 1] + uq[c]) / 2 for c in cuts]
     return np.array(th[::-1]), np.array(cen[::-1])
 
