@@ -40,12 +40,12 @@ def ewram_bank(lo, hi):
     return b0 if b0 == b1 else None
 WIDTH = {"": 4, "b": 1, "h": 2, "sb": 1, "sh": 2}
 SWIS = {5: "VBlankIntrWait"}
-IO_NAMES = {0x000: "DISPCNT", 0x004: "DISPSTAT", 0x006: "VCOUNT", 0x008: "BG0CNT",
+IO_NAMES = {0x000: "DISPCNT", 0x004: "DISPSTAT", 0x006: "VCOUNT", 0x008: "BG0CNT", 0x00A: "BG1CNT",
             0x010: "BG0HOFS", 0x012: "BG0VOFS", 0x130: "KEYINPUT", 0x200: "IE",
             0x202: "IF", 0x208: "IME", 0x100: "TM0CNT_L", 0x102: "TM0CNT_H",
             0x104: "TM1CNT_L", 0x106: "TM1CNT_H"}
 IO_READ = {0x006, 0x100, 0x104, 0x130}                 # registers with a read shim
-IO_WRITE = {0x000, 0x004, 0x008, 0x010, 0x012, 0x100, 0x102, 0x104, 0x106, 0x200, 0x202, 0x208}
+IO_WRITE = {0x000, 0x004, 0x008, 0x00A, 0x010, 0x012, 0x100, 0x102, 0x104, 0x106, 0x200, 0x202, 0x208}
 
 
 class InterceptError(Exception):
@@ -136,7 +136,9 @@ def classify(ssa, strict=False):
                 errors.append(f"{a:#010x}: {x.text}: pointer of unknown address space (strict mode)")
                 return None
             return "dyn"
-        if (reg == "rom" and st) or (reg in ("pal", "vram") and not st) or reg in ("io", "oam"):
+        if reg == "oam":
+            return "dyn:oam"        # Phase 5 B3: OAM through a pointer -> run-time dispatch to the mirror
+        if (reg == "rom" and st) or (reg in ("pal", "vram") and not st) or reg == "io":
             errors.append(f"{a:#010x}: {x.text}: {reg} access through a non-constant pointer not supported")
             return None
         return reg
@@ -156,11 +158,11 @@ def classify(ssa, strict=False):
             if iv and reg is None:
                 errors.append(f"{a:#010x}: {x.text}: address range {iv[0]:#x}-{iv[1]:#x} spans regions")
                 continue
-            if reg not in ("ram", "rom", "vram", "dyn", "ewram") or (reg == "rom" and x.op == "stm") or \
+            if reg and reg.split(":")[0] not in ("ram", "rom", "vram", "dyn", "ewram") or (reg == "rom" and x.op == "stm") or \
                     (reg == "vram" and x.op == "ldm"):
                 errors.append(f"{a:#010x}: {x.text}: {reg} block transfer not supported")
                 continue
-            acc[a] = {"region": reg, "const": None, "width": 4, "store": x.op == "stm"}
+            acc[a] = {"region": reg.split(":")[0], "const": None, "width": 4, "store": x.op == "stm", "oam": reg == "dyn:oam"}
             if reg == "ewram":
                 acc[a]["bank"] = ewram_bank(iv[0], iv[1] + 4 * len(x.regs) - 1) if iv else None
             continue
@@ -179,7 +181,7 @@ def classify(ssa, strict=False):
         if ib is None or ii is None:
             reg = unknown(a, x, env, base, idx, x.op.startswith("str"), n)
             if reg is not None:
-                acc[a] = {"region": reg, "const": None, "width": n, "store": x.op.startswith("str")}
+                acc[a] = {"region": reg.split(":")[0], "const": None, "width": n, "store": x.op.startswith("str"), "oam": reg == "dyn:oam"}
                 if reg == "ewram":
                     acc[a]["bank"] = None
             continue
@@ -193,7 +195,11 @@ def classify(ssa, strict=False):
                 errors.append(f"{a:#010x}: {x.text}: unresolvable address range {lo:#x}-{hi:#x}")
                 continue
             reg = "ram"
-        if reg in ("io", "oam") and const is None:
+        if reg == "oam" and const is None:
+            # Phase 5 B3: OAM indexed by a loop / pointer -> run-time dispatch to the mirror
+            acc[a] = {"region": "dyn", "const": None, "width": n, "store": st, "oam": True}
+            continue
+        if reg == "io" and const is None:
             errors.append(f"{a:#010x}: {x.text}: non-constant {reg.upper()} address {lo:#x}-{hi:#x}")
             continue
         if (reg == "rom" and st) or (reg in ("pal", "vram") and not st):

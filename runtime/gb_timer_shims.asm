@@ -31,7 +31,7 @@ wTm0: ds TM_SIZE
 wTm1: ds TM_SIZE
 wNow: ds 3
 
-SECTION "tm_code", ROMX, BANK[1]
+SECTION "tm_code", ROM0
 
 TimerInit::
     ld hl, wTick
@@ -168,7 +168,7 @@ TmValue:
     ret
 
 ; de -> HRAM slot c (zero-extended to 32 bits)
-TmOut:
+TmOut::                          ; global: tools/slice/snek_bot.py hooks it (de = value)
     ld a, e
     ldh [c], a
     inc c

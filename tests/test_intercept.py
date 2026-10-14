@@ -59,12 +59,18 @@ def test_nonconstant_io_is_compile_error(tmp_path):
     assert "non-constant IO address" in str(ex.value) and "0x080" in str(ex.value)
 
 
-def test_nonconstant_oam_is_compile_error(tmp_path):
+def test_nonconstant_oam_is_dynamic(tmp_path):
+    # Phase 5 B3: a non-constant OAM address is no longer a compile error; it is
+    # classified as a run-time dispatched store into the GBA OAM mirror ($D400).
     e = compile_c(tmp_path, "int main(void){ u32 i = REG_KEYINPUT & 3;"
                             " ((volatile u16 *)0x07000000)[4 * i] = 0x200; while (1) ; }")
-    with pytest.raises(InterceptError) as ex:
-        build(e, str(tmp_path / "t.gbc"), entry="main", prune="sound", hal=True)
-    assert "OAM" in str(ex.value)
+    ssa = ra.SSAProgram(lift_file(e, "main"))
+    ra.analyze(ssa)
+    acc, _ = classify(ssa)
+    dyn = [v for v in acc.values() if v.get("oam")]
+    assert dyn and all(v["region"] == "dyn" and v["store"] and v["const"] is None for v in dyn)
+    build(e, str(tmp_path / "t.gbc"), entry="main", prune="sound", hal=True)
+    assert os.path.getsize(tmp_path / "t.gbc") > 0
 
 
 def test_unsupported_bios_call_is_error(tmp_path):

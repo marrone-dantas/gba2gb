@@ -42,6 +42,7 @@ Start:
     ldh [rIF], a
     ldh [rTIMA], a
     ei
+    call BankInit
     call KernelEntry
     ldh a, [rTIMA]
     di

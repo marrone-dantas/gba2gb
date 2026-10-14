@@ -33,9 +33,7 @@ SECTION "entry", ROM0[$100]
 
 SECTION "shadow_oam", WRAMX[$D000]
 wShadowOAM:: ds 160
-SECTION "gba_oam_mirror", WRAMX[$D100]
-wGbaOAM:: ds 256              ; GBA OAM 0x07000000-0x070000FF (objects 0-31)
-SECTION "hal_state", WRAMX[$D200]
+SECTION "hal_state", WRAMX[$D100]
 wFrame:: ds 2                 ; VBlank counter (incremented by the ISR)
 wVsync:: ds 2                 ; completed vsyncs (= GBA frame number, see HAL_VCOUNT)
 wNeedCompose:: ds 1           ; a vsync completed: compose at the next vsync entry
@@ -47,6 +45,22 @@ wDispcnt:: ds 2
 wKeys:: ds 2                  ; last KEYINPUT value built by the input shim
 wDropped:: ds 1               ; hardware sprites dropped by the 40-sprite limit
 wUsed:: ds 1
+wRotBase:: ds 1               ; Phase 5 B3: start object for the 40-sprite rotation
+wCamX:: ds 1                  ; camera in GB pixels (follow OBJ0)
+wCamY:: ds 1
+wLastComposeFrame:: ds 1      ; compose at most once per GB frame (KEYINPUT)
+wBg1Cnt:: ds 2                ; last BG1CNT
+wBg1On:: ds 1                 ; 1 when the sparse overlay is applied
+wOvN:: ds 1                   ; sparse BG1 overlay count
+wOvEnt: ds 80                 ; 16 x (sbb, idx lo, idx hi, tile, saved map tile)
+wCurObj: ds 1
+wPinned: ds 1
+wObjK: ds 1
+wUsedPin: ds 1
+wObjSeen: ds 1
+wObjMax:: ds 1
+wOvSbb: ds 1                ; objects composed: max(static count, highest dynamic store + 1)
+wTileNZ: ds 256               ; OBJ tile ever had a non-zero pixel
 wBgLvl:: ds 16                ; BG palette bank 0: colour index -> GB colour (0-3)
 wBgRaw:: ds 16                ; BG palette bank 0: raw luminance levels (0-3)
 wObjLvl:: ds 16               ; OBJ palette bank 0: colour index -> GB colour (1-3, 0 = transparent)
@@ -81,6 +95,22 @@ wAffShown:: ds 1              ; slot tile in the hardware OAM (set after the DMA
 wAffSrc:: ds 2
 wAffDst:: ds 2
 
+SECTION "hal_state2", WRAMX[$D344]
+wPalDirty:: ds 1
+wComposeN:: ds 2
+wOamDirty:: ds 1
+wLive:: ds 16                 ; bitmap of objects that were ever stored
+wBgW:: ds 16                  ; BG tiles written (bitmap, tile shadow)
+wObjW:: ds 32                 ; OBJ tiles written
+wRcBank: ds 1
+wRcT: ds 1
+wRcOff: ds 2
+wRcK: ds 1
+
+SECTION "gba_oam_mirror", WRAMX[$D400]
+wGbaOAM:: ds 1024             ; GBA OAM 0x07000000-0x070003FF (128 objects)
+; native SM83 stack: $D800-$DFFF (SP starts at $E000)
+
 SECTION "hal", ROM0
 HalStart:
     di
@@ -99,8 +129,14 @@ HalStart:
     ld bc, $2000
     call MemClear                 ; VRAM (LCD is off)
     ld hl, $D000
-    ld bc, $0300
-    call MemClear                 ; shadow OAM, GBA OAM mirror, HAL state
+    ld bc, $00A0
+    call MemClear                 ; shadow OAM
+    ld hl, $D100
+    ld bc, $0200
+    call MemClear                 ; HAL state
+    ld hl, $D400
+    ld bc, $0400
+    call MemClear                 ; GBA OAM mirror (128 objects)
     call AffInit                  ; pre-rotated affine frames (LCD off; stub if unused)
     xor a
     ldh [$FF26], a                ; APU off, like SOUNDCNT_X at GBA reset
@@ -140,12 +176,17 @@ HalStart:
     ld a, $03
     ldh [HR_SP + 3], a
     call GbaDataInit
+    call BankInit
     call TimerInit                ; GBA timers 0/1 (gb_timer_shims.asm)
+    ld a, [GbaObjCount]
+    ld [wObjMax], a
     ld a, 1
     ld [wNeedCompose], a          ; the first vsync shows the initial OAM
     ldh [rIE], a                  ; VBlank interrupt only
     ei
-    jp KernelEntry
+    ld a, BANK(KernelEntry)
+    ld hl, KernelEntry
+    jp FarJump
 
 MemClear:
     xor a
@@ -218,6 +259,7 @@ HAL_WR_DISPCNT::
     inc c
     ldh a, [c]
     ld [wDispcnt + 1], a
+    call Bg1Refresh
     jr LcdOn
 
 HAL_WR_BG0HOFS::
@@ -229,6 +271,15 @@ HAL_WR_BG0VOFS::
     ldh a, [c]
     ld [wScy], a
     ret
+
+; BG1CNT (0x0400000A): track priority/SBB and refresh the sparse overlay.
+HAL_WR_BG1CNT::
+    ldh a, [c]
+    ld [wBg1Cnt], a
+    inc c
+    ldh a, [c]
+    ld [wBg1Cnt + 1], a
+    jp Bg1Refresh
 
 ; KEYINPUT (0x04000130) from JOYP. JOYP is a select matrix: P14 low selects the
 ; D-pad (bit0 Right, 1 Left, 2 Up, 3 Down), P15 low the buttons (bit0 A, 1 B,
@@ -264,8 +315,26 @@ HAL_KEYINPUT::
     ldh [c], a
     inc c
     ldh [c], a
-    ret
 HAL_KEYINPUT_END::
+    ; Phase 5 B3: games without VCOUNT/vsync (GbaView != 0, e.g. Snek) still
+    ; need a compose each GB frame. Compose at most once per wFrame.
+    ld a, [GbaView]
+    or a
+    ret z
+    ld a, [wOamDirty]
+    or a
+    ret z
+    ld a, [wFrame]
+    ld hl, wLastComposeFrame
+    cp [hl]
+    ret z
+    ld [hl], a
+    xor a
+    ld [wOamDirty], a
+    ldh a, [rLCDC]
+    bit 7, a
+    call z, LcdOn
+    jp Compose
 
 ; VCOUNT (0x04000006): GB LY mapped to the GBA line range (VCOUNT_LUT).
 ; A vsync completes when a read returns >= 160 after a read < 160 (the definition
@@ -353,39 +422,194 @@ SizeTab:  ; (width, height) in tiles, index = shape * 4 + size
     db 1, 1, 1, 1, 1, 1, 1, 1      ; shape 3 (prohibited): treated as 8x8
 
 Compose::
+    ld hl, wComposeN              ; statistics: composes (lag-frame counting)
+    inc [hl]
+    jr nz, .cn
+    inc hl
+    inc [hl]
+.cn:
+    ld a, [wPalDirty]
+    or a
+    call nz, Reconvert
     xor a
     ld [wDropped], a
     ld [wUsed], a
-    ld [wObjI], a
+    ld a, [GbaView]
+    or a
+    call nz, CamUpdate
     ld de, wShadowOAM
-.obj:
+    ld a, [GbaView]
+    or a
+    jr nz, .cam
+    ; legacy order: objects 0 .. n-1
+    xor a
+    ld [wObjI], a
+.lo:
     ld a, [wObjI]
     ld b, a
-    ld a, [GbaObjCount]
+    ld a, [wObjMax]
     cp b
     jp z, .done
     ld a, b
     inc a
     ld [wObjI], a
+    call CObj
+    jr .lo
+.cam:
+    ; Phase 5 B3: pinned objects first (HUD), then the rest from wRotBase,
+    ; rotating when the 40-sprite limit drops objects (flicker instead of loss)
+    ld a, [GbaPinLo]
+    ld [wObjI], a
+.pin:
+    ld a, [wObjI]
+    ld b, a
+    ld a, [GbaPinHi]
+    cp b
+    jr z, .pd
     ld a, b
-    add a, a
-    add a, a
-    add a, a
+    inc a
+    ld [wObjI], a
+    ld a, 1
+    ld [wPinned], a
+    call CObj
+    jr .pin
+.pd:
+    xor a
+    ld [wPinned], a
+    ld [wObjK], a
+    ld a, [wUsed]
+    ld [wUsedPin], a
+.rk:
+    ld a, [wObjK]
+    ld b, a
+    ld a, [wObjMax]
+    cp b
+    jr z, .rot
+    ld a, b
+    inc a
+    ld [wObjK], a
+    ; i = (wRotBase + k) mod n
+    ld a, [wRotBase]
+    add a, b
+    ld b, a
+    ld a, [wObjMax]
+    ld c, a
+    ld a, b
+    cp c
+    jr c, .im
+    sub c
+.im:
+    ld b, a
+    ld a, [GbaPinLo]
+    ld c, a
+    ld a, b
+    cp c
+    jr c, .np
+    ld a, [GbaPinHi]
+    ld c, a
+    ld a, b
+    cp c
+    jr c, .rk                     ; pinned: already drawn
+.np:
+    ld a, b                       ; skip objects that were never stored
+    ld c, a
+    srl a
+    srl a
+    srl a
+    ld hl, wLive
+    add a, l
     ld l, a
-    ld h, HIGH(wGbaOAM)
+    jr nc, .lv
+    inc h
+.lv:
+    ld a, c
+    and 7
+    ld c, a
+    ld a, [hl]
+    inc c
+.ls:
+    dec c
+    jr z, .lt
+    rrca
+    jr .ls
+.lt:
+    rrca
+    jr nc, .rk
+    call CObj
+    jr .rk
+.rot:
+    ld a, [wDropped]
+    or a
+    jr z, .nrot
+    ld a, [wObjSeen]
+    ld b, a                       ; advance by the objects that got a sprite
+    ld a, [wRotBase]
+    add a, b
+    ld b, a
+    ld a, [wObjMax]
+    ld c, a
+    ld a, b
+.mod:
+    cp c
+    jr c, .ms
+    sub c
+    jr .mod
+.ms:
+    ld [wRotBase], a
+    jr .done0
+.nrot:
+    xor a
+    ld [wRotBase], a
+.done0:
+    xor a
+    ld [wObjSeen], a
+.done:
+    ld a, e
+    cp 160
+    jr nc, .fin
+    xor a
+    ld [de], a                    ; Y = 0: hidden
+    inc de
+    inc de
+    inc de
+    inc de
+    jr .done
+.fin:
+    ld a, 1
+    ld [wDmaReady], a
+    ret
+
+; one GBA object (index b) -> hardware sprites at de
+CObj:
+    ld a, b
+    ld [wCurObj], a
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld a, h
+    add a, HIGH(wGbaOAM)
+    ld h, a
     ld a, [hl+]                   ; attr0 low: Y
     ld c, a
     ld a, [hl+]                   ; attr0 high
     ld b, a
     and $03
     cp $02
-    jr z, .obj                    ; hidden
+    ret z                         ; hidden
     ld a, b
     and $01
     ld [wAff], a                  ; affine object (double-size is rejected at bake time)
     ld a, b
     and $C0
     ld [wShape], a
+    ld a, [GbaView]
+    or a
+    jr z, .ylut
+    call CamY                     ; Phase 5 B3: camera mode (1:1 pixels)
+    jr .ydone
+.ylut:
     push hl
     ld h, HIGH(YLUT_LO)
     ld l, c
@@ -395,6 +619,7 @@ Compose::
     ld a, [hl]
     ld [wCy + 1], a
     pop hl
+.ydone:
     ld a, [hl+]                   ; attr1 low: X bits 0-7
     ld c, a
     ld a, [hl+]                   ; attr1 high
@@ -417,6 +642,12 @@ Compose::
     ld a, b
     and $C0
     ld [wSize], a
+    ld a, [GbaView]
+    or a
+    jr z, .xlut
+    call CamX
+    jr .xdone
+.xlut:
     push hl
     ld a, b
     and 1                         ; X bit 8
@@ -431,12 +662,29 @@ Compose::
     ld a, [hl]
     ld [wCx + 1], a
     pop hl
+.xdone:
     ld a, [hl+]                   ; attr2 low: tile
     ld [wTile], a
+    ld a, [GbaView]
+    or a
+    jr z, .tnz
+    push de
+    push hl
+    ld a, [wTile]
+    ld l, a
+    ld h, 0
+    ld de, wTileNZ
+    add hl, de
+    ld a, [hl]
+    pop hl
+    pop de
+    or a
+    ret z                         ; tile never had an opaque pixel: nothing to draw
+.tnz:
     ld a, [hl]
     ld b, a
     and $03
-    jr nz, .obj                   ; tile >= 256: not converted (docs/hal.md)
+    ret nz                        ; tile >= 256: not converted (docs/hal.md)
     ld a, b
     and $F0
     jr z, .p0
@@ -581,6 +829,18 @@ Compose::
     ld a, [wFlags]
     ld [de], a
     inc de
+    ld a, [wPinned]
+    or a
+    jr nz, .cnt
+    ld a, [wC]
+    ld b, a
+    ld a, [wR]
+    or b
+    jr nz, .cnt
+    ld a, [wObjSeen]
+    inc a
+    ld [wObjSeen], a
+.cnt:
 .next:
     ld a, [wC]
     inc a
@@ -596,23 +856,481 @@ Compose::
     ld a, [wH]
     cp b
     jp nz, .row
-    jp .obj
-.done:
-    ld a, e
-    cp 160
-    jr nc, .fin
-    xor a
-    ld [de], a                    ; Y = 0: hidden
-    inc de
-    inc de
-    inc de
-    inc de
-    jr .done
-.fin:
-    ld a, 1
-    ld [wDmaReady], a
     ret
+
 Compose_END::
+
+
+; ---------------------------------------------------------------- Phase 5 B3 camera
+; Camera mode (GbaView = 1): GBA pixels map 1:1, the 160x144 window follows object
+; GbaFollow, clamped to the 240x160 GBA screen; objects GbaPinLo..GbaPinHi-1 (HUD)
+; are drawn at their GBA screen position.
+CamUpdate:
+    ld a, [GbaFollow]
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld a, h
+    add a, HIGH(wGbaOAM)
+    ld h, a
+    ld a, [hl+]                   ; Y
+    ld c, a
+    inc hl
+    ld a, [hl+]                   ; X low
+    ld e, a
+    ld a, [hl]
+    and 1
+    ld d, a                       ; d:e = X (9 bits)
+    ; camX = clamp(X + 4 - 80, 0, 80)
+    ld a, d
+    or a
+    jr z, .xl
+    ld a, e
+    cp 128
+    jr nc, .x0                    ; X >= 384: negative
+    ld a, 80
+    jr .xs
+.xl:
+    ld a, e
+    cp 76
+    jr c, .x0
+    sub 76
+    cp 80
+    jr c, .xs
+    ld a, 80
+    jr .xs
+.x0:
+    xor a
+.xs:
+    ld [wCamX], a
+    ld [wScx], a
+    ; camY = clamp(Y + 4 - 72, 0, 16)
+    ld a, c
+    cp 224
+    jr nc, .y0
+    cp 68
+    jr c, .y0
+    sub 68
+    cp 16
+    jr c, .ys
+    ld a, 16
+    jr .ys
+.y0:
+    xor a
+.ys:
+    ld [wCamY], a
+    ld [wScy], a
+    ret
+
+; c = attr0 low (Y) -> wCy = GB sprite Y (signed 16-bit). Preserves bc, de, hl.
+CamY:
+    push de
+    push hl
+    ld l, c
+    ld h, 0
+    ld a, c
+    cp 224
+    jr c, .p
+    ld h, $FF
+.p:
+    ld a, [wPinned]
+    or a
+    jr nz, .np
+    ld a, [wCamY]
+    cpl
+    ld e, a
+    ld d, $FF
+    inc de
+    add hl, de
+.np:
+    ld de, 16
+    add hl, de
+    ld a, l
+    ld [wCy], a
+    ld a, h
+    ld [wCy + 1], a
+    pop hl
+    pop de
+    ret
+
+; b = attr1 high, c = attr1 low -> wCx = GB sprite X (signed 16-bit). Preserves bc, de, hl.
+CamX:
+    push de
+    push hl
+    ld l, c
+    ld h, 0
+    bit 0, b
+    jr z, .p
+    inc h                         ; 256..511
+    ld a, c
+    cp 128
+    jr c, .p
+    ld h, $FF                     ; >= 384: x - 512
+.p:
+    ld a, [wPinned]
+    or a
+    jr nz, .np
+    ld a, [wCamX]
+    cpl
+    ld e, a
+    ld d, $FF
+    inc de
+    add hl, de
+.np:
+    ld de, 8
+    add hl, de
+    ld a, l
+    ld [wCx], a
+    ld a, h
+    ld [wCx + 1], a
+    pop hl
+    pop de
+    ret
+
+; ---------------------------------------------------------------- Phase 5 B3 BG1 overlay
+; GBA BG1 is emulated as a sparse overlay on the GB BG map: non-zero map entries
+; written to screen blocks other than BG0's are recorded (16 max); when BG1 is
+; enabled and in front of BG0 (lower priority value) the entries of its screen
+; block replace the BG0 tiles (the replaced tiles are saved and restored).
+; Transparent BG1 pixels show the backdrop instead of BG0 (documented limit).
+OvRecord:                         ; b = VRAM offset bits 8-15, wVtmp = entry
+    ld a, [wVtmp]
+    or a
+    ret z
+    ld a, b
+    srl a
+    srl a
+    srl a
+    cp 32
+    ret nc
+    ld [wOvSbb], a
+    ld a, b
+    and 7
+    ld d, a
+    ldh a, [HR_T1]
+    srl d
+    rra
+    ld e, a                       ; d:e = map index 0-1023
+    ld a, [wOvN]
+    ld b, a
+    ld hl, wOvEnt
+    or a
+    jr z, .append
+.find:
+    ld a, [wOvSbb]
+    cp [hl]
+    jr nz, .next
+    inc hl
+    ld a, [hl+]
+    cp e
+    jr nz, .n2
+    ld a, [hl+]
+    cp d
+    jr nz, .n3
+    ld a, [wVtmp]
+    ld [hl], a
+    ret
+.n2:
+    inc hl
+.n3:
+    inc hl
+    inc hl
+    jr .cont
+.next:
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+.cont:
+    dec b
+    jr nz, .find
+.append:
+    ld a, [wOvN]
+    cp 16
+    ret nc
+    ld c, a
+    inc a
+    ld [wOvN], a
+    ld a, c
+    ld b, a
+    add a, a
+    add a, a
+    add a, b                      ; 5 * n
+    ld hl, wOvEnt
+    add a, l
+    ld l, a
+    jr nc, .nc
+    inc h
+.nc:
+    ld a, [wOvSbb]
+    ld [hl+], a
+    ld a, e
+    ld [hl+], a
+    ld a, d
+    ld [hl+], a
+    ld a, [wVtmp]
+    ld [hl+], a
+    xor a
+    ld [hl], a
+    ret
+
+Bg1Refresh::
+    ld b, 0                       ; wanted overlay = 0 (none) or SBB + 1
+    ld a, [wDispcnt + 1]
+    bit 1, a                      ; BG1 enabled
+    jr z, .w
+    ld a, [wBg1Cnt]
+    and 3
+    ld c, a
+    ld a, [GbaBg0Prio]
+    cp c
+    jr z, .w                      ; same priority: BG0 (lower index) in front
+    jr c, .w
+    ld a, [wBg1Cnt + 1]
+    and $1F
+    inc a
+    ld b, a
+.w:
+    ld a, [wBg1On]
+    cp b
+    ret z
+    push bc
+    or a
+    jr z, .apply
+    ld c, a
+    ld e, 0                       ; restore
+    call OvWalk
+.apply:
+    pop bc
+    ld a, b
+    ld [wBg1On], a
+    or a
+    ret z
+    ld c, b
+    ld e, 1
+    ; fall through
+; entries with SBB + 1 == c: e = 1 apply (save BG0 tile, write overlay), 0 restore
+OvWalk:
+    ld a, [wOvN]
+    or a
+    ret z
+    ld b, a
+    ld hl, wOvEnt
+.lp:
+    ld a, [hl+]
+    inc a
+    cp c
+    jr nz, .sk
+    push bc
+    push de
+    ld a, [hl+]
+    ld e, a
+    ld a, [hl+]
+    ld d, a
+    push hl
+    ld hl, $9800
+    add hl, de
+    ld d, h
+    ld e, l
+    pop hl
+    pop bc
+    push bc
+    ld a, c
+    or a
+    jr z, .rs
+    call WaitVram
+    ld a, [de]
+    inc hl
+    ld [hl-], a
+    ld a, [hl]
+    ld b, a
+    call WaitVram
+    ld a, b
+    ld [de], a
+    jr .dn
+.rs:
+    inc hl
+    ld a, [hl-]
+    ld b, a
+    call WaitVram
+    ld a, b
+    ld [de], a
+.dn:
+    inc hl
+    inc hl
+    pop de
+    pop bc
+    jr .nx
+.sk:
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+.nx:
+    dec b
+    jr nz, .lp
+    ret
+
+
+; ---------------------------------------------------------------- Phase 5 B3 tile shadow
+; The HAL converts 4bpp tiles to 2bpp through the palette level tables when they are
+; stored, so palettes had to be loaded first. Programs without EWRAM (GbaShadow = 1)
+; keep the raw 4bpp data in MBC5 SRAM (bank 14: BG tiles 0-127, bank 15: OBJ tiles
+; 0-255) and every tile written is reconverted after a palette change (Snek loads
+; its palettes last).
+; a = SRAM bank, de = offset in the tile area, wVtmp = halfword. Preserves de.
+ShadowPut:
+    ld b, a
+    ld a, [GbaShadow]
+    or a
+    ret z
+    ld a, b
+    ld [$4000], a
+    ld a, d
+    or $A0
+    ld h, a
+    ld l, e
+    ld a, [wVtmp]
+    ld [hl+], a
+    ld a, [wVtmp + 1]
+    ld [hl], a
+    ; written-tile bitmap: t = de >> 5; BG -> wBgW, OBJ -> wObjW
+    ld a, e
+    swap a
+    rrca
+    and 7
+    ld c, a
+    ld a, d
+    add a, a
+    add a, a
+    add a, a
+    or c                          ; t (0-255)
+    ld c, a
+    ld hl, wObjW
+    ld a, b
+    cp 15
+    jr z, .o
+    ld hl, wBgW
+.o:
+    ld a, c
+    srl a
+    srl a
+    srl a
+    add a, l
+    ld l, a
+    jr nc, .n
+    inc h
+.n:
+    ld a, c
+    and 7
+    ld b, a
+    ld a, 1
+    inc b
+.sh:
+    dec b
+    jr z, .set
+    add a, a
+    jr .sh
+.set:
+    or [hl]
+    ld [hl], a
+    ret
+
+Reconvert:
+    xor a
+    ld [wPalDirty], a
+    ld a, [GbaShadow]
+    or a
+    ret z
+    ld a, 14
+    ld [wRcBank], a
+    ld hl, wBgW
+    ld b, 16
+    call .kind
+    ld a, 15
+    ld [wRcBank], a
+    ld hl, wObjW
+    ld b, 32
+.kind:                            ; hl = bitmap, b = bytes
+    xor a
+    ld [wRcT], a
+.byte:
+    ld a, [hl+]
+    push hl
+    push bc
+    ld c, 8
+.bit:
+    rra
+    push af
+    push bc
+    call c, .tile
+    pop bc
+    pop af
+    push hl
+    ld hl, wRcT
+    inc [hl]
+    pop hl
+    dec c
+    jr nz, .bit
+    pop bc
+    pop hl
+    dec b
+    jr nz, .byte
+    ret
+.tile:                            ; tile wRcT of bank wRcBank: 16 halfwords
+    ld a, [wRcT]
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl                    ; t * 32
+    ld a, l
+    ld [wRcOff], a
+    ld a, h
+    ld [wRcOff + 1], a
+    ld a, 16
+    ld [wRcK], a
+.hw:
+    ld a, [wRcBank]
+    ld [$4000], a
+    ld a, [wRcOff + 1]
+    ld d, a
+    or $A0
+    ld h, a
+    ld a, [wRcOff]
+    ld e, a
+    ld l, a
+    ld a, [hl+]
+    ld [wVtmp], a
+    ld a, [hl]
+    ld [wVtmp + 1], a
+    ld a, [wRcBank]
+    cp 15
+    jr z, .ob
+    ld bc, $9000
+    ld hl, wBgLvl
+    jr .cv
+.ob:
+    ld bc, $8000
+    ld hl, wObjLvl
+.cv:
+    call HAL_VRAM_STORE16.conv
+    ld hl, wRcOff
+    ld a, [hl]
+    add a, 2
+    ld [hl+], a
+    jr nc, .nc
+    inc [hl]
+.nc:
+    ld hl, wRcK
+    dec [hl]
+    jr nz, .hw
+    ret
 
 ; ---------------------------------------------------------------- VRAM / palette
 WaitVram:
@@ -666,22 +1384,57 @@ HAL_VRAM_STORE16::
     ld d, a
     ldh a, [HR_T1]
     ld e, a
+    ld a, [wVtmp]                 ; Phase 5 B3: remember tiles with opaque pixels
+    ld b, a
+    ld a, [wVtmp + 1]
+    or b
+    jr z, .z
+    push de
+    ld a, e
+    swap a
+    rrca
+    and 7
+    ld l, a
+    ld a, d
+    add a, a
+    add a, a
+    add a, a
+    or l
+    ld l, a
+    ld h, 0
+    ld bc, wTileNZ
+    add hl, bc
+    ld [hl], 1
+    pop de
+.z:
+    ld a, 15                      ; tile shadow: SRAM bank 15
+    call ShadowPut
     ld bc, $8000
     ld hl, wObjLvl
     jr .conv
 .bg:
     ldh a, [HR_T1 + 1]
     ld b, a
+    ld a, [GbaBgSbbHi]            ; Phase 5 B3: the BG0 screen block wins when it
+    ld c, a                       ; overlaps the character block (Snek: SBB 1 in CBB 0)
+    ld a, b
+    sub c
+    jr c, .tile
+    cp 8
+    jr c, .map
+.tile:
     ld a, [GbaBgCbbHi]
     ld c, a
     ld a, b
     sub c
-    jr c, .map
+    jp c, OvRecord
     cp $10
-    jr nc, .map                   ; BG tile >= 128
+    jp nc, OvRecord               ; BG tile >= 128: another screen block (BG1 overlay)
     ld d, a
     ldh a, [HR_T1]
     ld e, a
+    ld a, 14                      ; tile shadow: SRAM bank 14
+    call ShadowPut
     ld bc, $9000
     ld hl, wBgLvl
     jr .conv
@@ -690,9 +1443,6 @@ HAL_VRAM_STORE16::
     ld c, a
     ld a, b
     sub c
-    ret c
-    cp 8
-    ret nc
     ld d, a
     ldh a, [HR_T1]
     ld e, a
@@ -786,6 +1536,8 @@ HAL_PAL_STORE32::
 ; and OBJ bank 0 (256-271) update the level tables: level = 3 - ((R + 2G + B) / 4 >> 3)
 ; (0 = white). Other banks are ignored (OBJ banks != 0 use the inverted OBP1).
 HAL_PAL_STORE16::
+    ld a, 1
+    ld [wPalDirty], a             ; Phase 5 B3: reconvert shadowed tiles at the next Compose
     ldh a, [HR_T1 + 1]
     and 3
     ld d, a
@@ -820,6 +1572,11 @@ HAL_PAL_STORE16::
     or c                          ; G
     add a, a
     add a, b                      ; R + 2G + B (0-124)
+    ld b, a
+    ld a, [GbaView]
+    or a
+    ld a, b
+    jr nz, .gamma
     srl a
     srl a
     srl a
@@ -828,6 +1585,19 @@ HAL_PAL_STORE16::
     cpl
     and 3
     ld b, a
+    jr .lvl
+.gamma:                           ; Phase 5 B3 (view mode): perceptual thresholds so
+    ld b, 3                       ; dark palettes keep 4 distinct DMG shades
+    cp 12
+    jr c, .lvl
+    dec b
+    cp 36
+    jr c, .lvl
+    dec b
+    cp 72
+    jr c, .lvl
+    dec b
+.lvl:
     ld a, d
     or a
     jr nz, .obj
@@ -947,6 +1717,8 @@ HAL_DYN_ADDR::
     jr z, .ram
     cp $02
     jr z, .ew
+    cp $07
+    jr z, .oam
     ld hl, wDynZero
     xor a
     ld [hl+], a
@@ -961,6 +1733,11 @@ HAL_DYN_ADDR::
     ldh a, [HR_T1 + 1]
     and $1F
     or $A0
+    jr .lo
+.oam:                             ; Phase 5 B3: GBA OAM -> mirror $D400 | (addr & $3FF)
+    ldh a, [HR_T1 + 1]
+    and $03
+    or HIGH(wGbaOAM)
     jr .lo
 .rom:
     ldh a, [HR_T1 + 1]
@@ -1007,7 +1784,61 @@ HAL_DYN_STORE::
     jr z, .pal
     cp $06
     jr z, .vram
+    cp $07
+    jr z, .oam
     ret
+.oam:
+    push de                       ; e = byte count
+    ldh a, [HR_T1 + 1]            ; object = (addr & $3FF) >> 3; extend wObjMax
+    and 3
+    ld d, a
+    ldh a, [HR_T1]
+    srl d
+    rra
+    srl d
+    rra
+    srl d
+    rra
+    ld e, a                       ; object index
+    inc a
+    ld d, a
+    ld a, [wObjMax]
+    cp d
+    jr nc, .om
+    ld a, d
+    ld [wObjMax], a
+.om:
+    ld a, 1
+    ld [wOamDirty], a
+    ld a, e                       ; set live bit
+    ld c, a
+    srl a
+    srl a
+    srl a
+    ld hl, wLive
+    add a, l
+    ld l, a
+    jr nc, .ln
+    inc h
+.ln:
+    ld a, c
+    and 7
+    ld b, a
+    ld a, 1
+    inc b
+.lsh:
+    dec b
+    jr z, .lset
+    add a, a
+    jr .lsh
+.lset:
+    or [hl]
+    ld [hl], a
+    pop de
+    ldh a, [HR_T1 + 1]
+    and $03
+    or HIGH(wGbaOAM)
+    jr .hl
 .ew:
     call HAL_EW_SETBANK
     ldh a, [HR_T1 + 1]

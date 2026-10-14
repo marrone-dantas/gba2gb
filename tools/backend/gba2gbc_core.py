@@ -87,8 +87,11 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
             run(["rgbasm", "-I", RUNTIME, "-o", ro, os.path.join(RUNTIME, "runtime.asm")])
         so = os.path.join(td, "softfloat.o")
         run(["rgbasm", "-I", RUNTIME, "-o", so, os.path.join(RUNTIME, "gb_softfloat.asm")])
+        bo = os.path.join(td, "bank.o")
+        run(["rgbasm", "-I", RUNTIME, "-o", bo, os.path.join(RUNTIME, "gb_bank.asm")])
+        objs.append(bo)
         objs.append(so)
-        run(["rgblink", "-o", out, "-m", out + ".map", "-n", out[:-4] + ".sym", *objs])
+        run(["rgblink", "-o", out, "-m", out + ".map", "-n", os.path.splitext(out)[0] + ".sym", *objs])
         run(["rgbfix", "-v", "-p", "0xFF", "-m", "0x1B", "-r", "0x04", "-t", "GBA2GB", out])
     return prog
 

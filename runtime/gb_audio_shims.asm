@@ -464,7 +464,7 @@ SfxChunk:
     ld [wSfxPtr], a
     ld a, h
     ld [wSfxPtr + 1], a
-    ld a, 1
+    ld a, [wRomBank]              ; back to the interrupted code's bank
     ld [$2000], a
     ld hl, wSfxLeft
     ld a, [hl]

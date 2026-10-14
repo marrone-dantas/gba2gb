@@ -27,12 +27,17 @@ def analyze(ssa, strict=None):
     for a, d in acc.items():
         if d["region"] == "oam" and d["store"]:
             nobj = max(nobj, (d["const"] - 0x07000000) // 8 + 1)
-    if nobj > 32:
-        raise InterceptError("objects >= 32 are not supported by the GBA OAM mirror")
+    if nobj > 128:
+        raise InterceptError("OAM has 128 objects")
+    if any(d.get("oam") for d in acc.values()):
+        nobj = max(nobj, 128)     # Phase 5 B3: pointer OAM -> full mirror
+        view = 1
+    else:
+        view = 1 if nobj > 32 else 0
     cnt = bg0cnt(ssa, acc)
     oam_st = {a: d for a, d in acc.items() if d["region"] == "oam" and d["store"]}
     io_st = {a: d for a, d in acc.items() if d["region"] == "io" and d["store"]}
-    return acc, {"sram": srep, "nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st, "io_stores": io_st}
+    return acc, {"sram": srep, "nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st, "io_stores": io_st, "view": view}
 
 
 def classify_phase0(prog):
@@ -81,8 +86,11 @@ def hal_sections(elf_path, prog, info, affine=None):
               f".e{b}:", "    xor a", "    ld [hl+], a", "    dec bc", "    ld a, b", "    or c", f"    jr nz, .e{b}"]
     info["ewram"] = ew
     L += ["    ret", "GbaData:"] + db(data)
+    view = info.get("view", 0)
+    prio = (cnt or 0) & 3
     L += [f"GbaObjCount:: db {info['nobj']}", f"GbaBgCbbHi:: db ${cbb * 0x40:02X}",
-          f"GbaBgSbbHi:: db ${sbb * 8:02X}"]
+          f"GbaBgSbbHi:: db ${sbb * 8:02X}", f"GbaBg0Prio:: db {prio}",
+          f"GbaView:: db {view}", f"GbaShadow:: db {1 if view and not ew[1] else 0}", "GbaFollow:: db 0", "GbaPinLo:: db 66", "GbaPinHi:: db 76"]
     L += ['SECTION "arm_image", ROM0[$2000]', "ArmImage:"] + db(img)
     from tools.affine.affine_lut_baker import bake_program
     aff_asm, rep = bake_program(elf_path, info["oam_stores"], **(affine or {}))

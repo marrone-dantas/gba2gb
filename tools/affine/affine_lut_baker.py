@@ -218,7 +218,7 @@ def emit_asm(group, frames, lut, shift, p):
           "    di", f"    ld a, {LUT_BANK}", "    ld [$2000], a", "    ld b, [hl]"]
     if p["mode"] == "resident":
         L += ["    ld h, $50", "    ld l, b", "    ld a, [hl]", "    ld [wAffTile], a"]
-    L += ["    ld a, 1", "    ld [$2000], a", "    ei", "    ld a, b", "    ld [wAffWant], a"]
+    L += ["    ld a, [wRomBank]", "    ld [$2000], a", "    ei", "    ld a, b", "    ld [wAffWant], a"]
     if p["mode"] == "resident":
         L += ["    ld [wAffHave], a"]
     L += ["    ret", ".end::"]
@@ -232,7 +232,7 @@ def emit_asm(group, frames, lut, shift, p):
           "    ld a, [hl]", "    ld [$2000], a", "    ld hl, AffSrcLo", "    add hl, bc", "    ld a, [hl]",
           "    push af", "    ld hl, AffSrcHi", "    add hl, bc", "    ld h, [hl]", "    pop af", "    ld l, a",
           f"    ld bc, {fb}", ".c:", "    ld a, [hl+]", "    ld [de], a", "    inc de", "    dec bc", "    ld a, b",
-          "    or c", "    jr nz, .c", "    ld a, 1", "    ld [$2000], a", "    ret"]
+          "    or c", "    jr nz, .c", "    ld a, [wRomBank]", "    ld [$2000], a", "    ret"]
     if p["mode"] == "resident":
         base = p["base"]
         L += ["AffInit::", "    ld de, $%04X" % (0x8000 + 16 * base), "    xor a", ".f:", "    push af",
@@ -265,7 +265,7 @@ def emit_asm(group, frames, lut, shift, p):
               "    ld d, a", ".cp::", f"    REPT {p['chunk']}", "    ld a, [hl+]", "    ld [de], a", "    inc e",
               "    ENDR", ".cpend::", "    ld a, e", "    or a", "    jr nz, .nd", "    inc d", ".nd:",
               "    ld a, l", "    ld [wAffSrc], a", "    ld a, h", "    ld [wAffSrc + 1], a", "    ld a, e",
-              "    ld [wAffDst], a", "    ld a, d", "    ld [wAffDst + 1], a", "    ld a, 1", "    ld [$2000], a",
+              "    ld [wAffDst], a", "    ld a, d", "    ld [wAffDst + 1], a", "    ld a, [wRomBank]", "    ld [$2000], a",
               "    ld hl, wAffLeft", "    dec [hl]", "    jr nz, .out", "    ld a, [wAffBack]",
               "    ld [wAffTile], a", f"    xor {s0 ^ s1}", "    ld [wAffBack], a", "    ld a, [wAffCur]",
               "    ld [wAffHave], a", ".out:", "    pop hl", "    pop de", "    pop bc", "    ret", ".idle:",

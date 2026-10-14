@@ -1,3 +1,73 @@
+INCLUDE "hram.inc"
+SECTION "sf_stubs", ROM0
+NAT_dsub::
+    ld a, BANK(NAT_dsub_impl)
+    ld hl, NAT_dsub_impl
+    jp FarCall
+NAT_dadd::
+    ld a, BANK(NAT_dadd_impl)
+    ld hl, NAT_dadd_impl
+    jp FarCall
+NAT_fsub::
+    ld a, BANK(NAT_fsub_impl)
+    ld hl, NAT_fsub_impl
+    jp FarCall
+NAT_fadd::
+    ld a, BANK(NAT_fadd_impl)
+    ld hl, NAT_fadd_impl
+    jp FarCall
+NAT_dmul::
+    ld a, BANK(NAT_dmul_impl)
+    ld hl, NAT_dmul_impl
+    jp FarCall
+NAT_fmul::
+    ld a, BANK(NAT_fmul_impl)
+    ld hl, NAT_fmul_impl
+    jp FarCall
+NAT_i2d::
+    ld a, BANK(NAT_i2d_impl)
+    ld hl, NAT_i2d_impl
+    jp FarCall
+NAT_i2f::
+    ld a, BANK(NAT_i2f_impl)
+    ld hl, NAT_i2f_impl
+    jp FarCall
+NAT_f2d::
+    ld a, BANK(NAT_f2d_impl)
+    ld hl, NAT_f2d_impl
+    jp FarCall
+NAT_d2f::
+    ld a, BANK(NAT_d2f_impl)
+    ld hl, NAT_d2f_impl
+    jp FarCall
+NAT_f2iz::
+    ld a, BANK(NAT_f2iz_impl)
+    ld hl, NAT_f2iz_impl
+    jp FarCall
+NAT_fcmpeq::
+    ld a, BANK(NAT_fcmpeq_impl)
+    ld hl, NAT_fcmpeq_impl
+    jp FarCall
+NAT_fcmplt::
+    ld a, BANK(NAT_fcmplt_impl)
+    ld hl, NAT_fcmplt_impl
+    jp FarCall
+NAT_fcmpgt::
+    ld a, BANK(NAT_fcmpgt_impl)
+    ld hl, NAT_fcmpgt_impl
+    jp FarCall
+NAT_idiv::
+    ld a, BANK(NAT_idiv_impl)
+    ld hl, NAT_idiv_impl
+    jp FarCall
+NAT_idivmod::
+    ld a, BANK(NAT_idivmod_impl)
+    ld hl, NAT_idivmod_impl
+    jp FarCall
+NAT_lmul::
+    ld a, BANK(NAT_lmul_impl)
+    ld hl, NAT_lmul_impl
+    jp FarCall
 ; runtime/gb_softfloat.asm - Phase 5 B2: native SM83 replacements for the libgcc /
 ; AEABI helpers used by Thumb code (docs/softfloat.md). A BL to one of them
 ; (tools/lift/lift.py NATIVES) becomes `call NAT_<name>`.
@@ -15,7 +85,6 @@
 ; Internal format (struct of 12 bytes): +0 sign ($00/$80), +1 class (0 zero,
 ; 1 finite, 2 inf, 3 nan), +2 E (signed 16-bit LE), +4 M (64-bit LE). Finite value =
 ; M * 2^(E-63), M normalised (bit 63 set).
-INCLUDE "hram.inc"
 
 DEF OS EQU 0
 DEF OC EQU 1
@@ -1069,12 +1138,12 @@ QuietF:
     scf
     ret
 
-NAT_dsub::
+NAT_dsub_impl::
     ld hl, HR_R3 + 3
     ld a, [hl]
     xor $80
     ld [hl], a
-NAT_dadd::
+NAT_dadd_impl::
     xor a
     ld [sfMode], a
     ld hl, HR_R0
@@ -1091,12 +1160,12 @@ NAT_dadd::
     ret c
     jp AddCore
 
-NAT_fsub::
+NAT_fsub_impl::
     ld hl, HR_R1 + 3
     ld a, [hl]
     xor $80
     ld [hl], a
-NAT_fadd::
+NAT_fadd_impl::
     ld a, 1
     ld [sfMode], a
     ld hl, HR_R0
@@ -1213,7 +1282,7 @@ RetInfM:
     jp z, RetInfD
     jp RetInfF
 
-NAT_dmul::
+NAT_dmul_impl::
     xor a
     ld [sfMode], a
     ld hl, HR_R0
@@ -1225,7 +1294,7 @@ NAT_dmul::
     call NanBinD
     ret c
     jr MulSpecial
-NAT_fmul::
+NAT_fmul_impl::
     ld a, 1
     ld [sfMode], a
     ld hl, HR_R0
@@ -1320,14 +1389,14 @@ IntToA:
     or 1                    ; nz
     ret
 
-NAT_i2d::
+NAT_i2d_impl::
     xor a
     ld [sfMode], a
     call IntToA
     jp nz, PackA
     ld b, 0
     jp RetZeroD
-NAT_i2f::
+NAT_i2f_impl::
     ld a, 1
     ld [sfMode], a
     call IntToA
@@ -1335,7 +1404,7 @@ NAT_i2f::
     ld b, 0
     jp RetZeroF
 
-NAT_f2d::
+NAT_f2d_impl::
     xor a
     ld [sfMode], a
     ld hl, HR_R0
@@ -1390,7 +1459,7 @@ NAT_f2d::
     ldh [HR_R1 + 3], a
     ret
 
-NAT_d2f::
+NAT_d2f_impl::
     ld a, 1
     ld [sfMode], a
     ld hl, HR_R0
@@ -1408,7 +1477,7 @@ NAT_d2f::
     ld b, 0
     jp RetNanF              ; libgcc returns the (positive) default NaN
 
-NAT_f2iz::
+NAT_f2iz_impl::
     ld hl, HR_R0
     ld de, sfA
     call UnpackF
@@ -1630,23 +1699,23 @@ SetR0Bool:                  ; R0 = (z ? 1 : 0)
     ldh [HR_R0 + 3], a
     ret
 
-NAT_fcmpeq::
+NAT_fcmpeq_impl::
     call FCmp
     or a
     jr SetR0Bool
-NAT_fcmplt::
+NAT_fcmplt_impl::
     call FCmp
     cp -1
     jr SetR0Bool
-NAT_fcmpgt::
+NAT_fcmpgt_impl::
     call FCmp
     cp 1
     jr SetR0Bool
 
 ; ------------------------------------------------------------------ integer division
 ; R0 / R1 signed: quotient -> R0, remainder -> R1 (idivmod); idiv = quotient only.
-NAT_idiv::
-NAT_idivmod::
+NAT_idiv_impl::
+NAT_idivmod_impl::
     ; divisor 0: libgcc returns INT_MAX / INT_MIN / 0 by the dividend's sign
     ldh a, [HR_R1]
     ld b, a
@@ -1840,7 +1909,7 @@ SignTo:
 
 ; ------------------------------------------------------------------ 64-bit multiply
 ; R0:R1 = low 64 bits of (R0:R1 * R2:R3)
-NAT_lmul::
+NAT_lmul_impl::
     ld hl, sfP
     xor a
     REPT 8

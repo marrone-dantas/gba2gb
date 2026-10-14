@@ -35,3 +35,60 @@ Soft-float / integer helpers used by Snek (`dadd`, `dmul`, `f2iz`, `idiv`,
 GBA timers 0 and 1 (`TM0D`/`TM1D`/`TMxCNT`) are emulated by
 `runtime/gb_timer_shims.asm` from the GB TIMA clock (resolution 1/16384 s).
 Covered by `tests/test_timer.py`.
+
+## B3: HAL for Snek on the DMG
+
+Build: `python -c "from tools.slice.snek_bot import build_gb; build_gb()"` →
+`build/snek/snek_dmg.gb` (+ `.sym`, `.map`). The ROM is built, never committed
+(GPL-3.0: it is a derivative of `third_party/snek-gba`, whose source and LICENSE
+sit next to the tools that produce it). Default backend: `prune="sound"` (flag
+liveness + proven value ranges, `docs/bitwidth_pruning.md`).
+
+What the HAL had to learn:
+
+* **MBC5 multi-bank kernel.** The transpiled kernel is ~43 KiB. `codegen.generate()`
+  packs whole functions into ROMX banks 2, 3, … (bank 1: soft-float, reached through
+  ROM0 stubs `NAT_x`). Cross-bank `call` → `FarCall`, cross-bank jumps → `FarJump`,
+  and a cross-bank jump to a function entry (Thumb tail call) → `call FarCall; ret`
+  (`runtime/gb_bank.asm`). Splitting only at function entries matters: a function
+  that spans two banks would `ret` with the wrong bank mapped (this crashed Snek
+  after a few hundred frames). The one function larger than a bank (`main`) is split
+  at instruction boundaries and its `ret`s in continuation banks go through
+  `RetBank` (re-map the entry bank from ROM0, then return). Everything the VBlank
+  ISR or several banks call (HAL, timer shims) lives in ROM0.
+* **OAM mirror and pointer-based OAM.** All Snek OAM accesses go through pointers in
+  `g_state`. `HAL_DYN_ADDR` / `HAL_DYN_STORE` route `$07xxxxxx` to the 128-object
+  mirror `wGbaOAM` at `$D400`, track the highest object written (`wObjMax`), a
+  per-object "live" bitmap and `wOamDirty`. Constant-address OAM stores set
+  `wOamDirty` too.
+* **Sprite composer with more than 40 objects.** Snek has 76 objects. In camera mode
+  (`GbaView = 1`, enabled automatically for pointer-based OAM or > 32 objects) the
+  composer draws the pinned objects first (score digits, `GbaPinLo..GbaPinHi`), then
+  the rest starting at a rotating base; when the 40-sprite / 10-per-line budget
+  drops objects, the base advances, so overflow shows as flicker, not as permanently
+  missing body segments.
+* **Camera.** GBA pixels map 1:1; the 160×144 window follows the head
+  (`CamUpdate`, SCX clamped to 0..80, SCY to 0..16). Pinned objects ignore the camera.
+* **BG1 sparse overlay.** "SNEK" / "DEAD" (BG1, SBB 2 / 3) are recorded as a sparse
+  list of non-empty map entries (`OvRecord`) and drawn over BG0 when BG1CNT puts BG1
+  in front (`Bg1Refresh` on BG1CNT / DISPCNT writes).
+* **Tiles before palettes.** Snek loads tiles before palettes, so raw 4bpp tiles are
+  shadowed in SRAM banks 14 (BG) / 15 (OBJ) and reconverted after palette writes;
+  shades use gamma thresholds (12/36/72) in camera mode.
+* **Compose on key read.** Snek never waits for vsync; the HAL composes OAM once per
+  GB frame at the first KEYINPUT read after an OAM change (`HAL_KEYINPUT_END`).
+* **Codegen speed-ups found on the way:** constant shifts (`lsls r1, r1, #23`) are now
+  inline byte moves plus at most 7 register bit steps instead of the bit-loop helpers.
+
+Bugs fixed during B3 (each caused a hang or a crash): `HAL_DYN_STORE .oam`
+clobbered `c`/`e` (source slot / byte count), `WaitVram` clobbered `a` in the
+overlay walk, a function split across banks returned into the wrong bank.
+
+Test: `tests/test_snek_gb.py` (MBC5 header; 3000-frame bot run without crashes,
+stack in `$D800-$DFFF`, ≥ 1 frog eaten, g_state identical to the Unicorn reference
+at every KEYINPUT read).
+
+Known limits: performance (see B4) — a gameplay iteration of Snek costs ~10 GB
+frames, because every iteration walks all 64 body slots (float copies,
+`set_obj_pos` through dynamic pointers). The game scales movement by the elapsed
+timer value, so it plays at the right speed but at ~6 updates per second.
