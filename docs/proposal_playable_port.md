@@ -1,5 +1,8 @@
 # Proposal: a playable Super Mario Advance 2 on DMG
 
+> **Update:** the architecture choice below (game-specific engine) is superseded by
+> [proposal_generic_engine.md](proposal_generic_engine.md). The diagnosis in §1 still applies.
+
 Status: design proposal (no code). Scope: turn gba2gb from "logically exact but ~5 Hz"
 into "playable SMA2 at 30 Hz logic / 30 fps display on a DMG + MBC5 cart".
 
