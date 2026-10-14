@@ -135,3 +135,10 @@ def test_static_contains_dynamic(path):
             assert p[0] <= o[0] and o[1] <= p[1] and p[2] <= o[2] and o[3] <= p[3], (v, v.ins.text, p, o)
             checked += 1
     assert checked > 0
+
+
+def test_interprocedural_params():
+    """B0: callee parameters get the join of the call-site arguments."""
+    ssa = ra.analyze_file(elf("k17"))
+    sq = ssa.funcs[min(ssa.funcs)]  # sq(x) is the first function in .text
+    assert sq.params[0].proven[:2] == (0, 0xFFF)      # called with r0 & 0xFFF and r3 & 0xFF

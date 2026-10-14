@@ -47,7 +47,8 @@ Soundness is checked by `tests/test_range_analysis.py`: every value observed at 
 instruction definition (200 seeds) lies inside its proven range, for all 20 kernels.
 
 ### Known gaps (static vs dynamic)
-- No interprocedural propagation: callee parameters are TOP (k17: `sq(r0 & 0xFFF)`).
+- Interprocedural ranges (B0) cover direct BL only: callee params = join of call-site
+  args, BL r0 = join of callee returns (k17: `sq` param proven u12; product still i32).
 - Memory is not tracked: every `ldr`/`pop` result is TOP (k05/k06 arrays on the stack).
 - Data-dependent loops (gcd, isqrt, popcount, `while (n--)` with `subs`/`bne`) are not
   bounded: only `cmp`-guarded counters with constant init/step are enumerated exactly.

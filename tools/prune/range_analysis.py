@@ -218,6 +218,7 @@ class Value:
     env: dict = field(default_factory=dict)    # reg -> Value used by `ins`
     args: dict = field(default_factory=dict)   # phi: pred block -> Value
     cond: str | None = None                    # pi: condition, env['b'] = other operand
+    links: list | None = None                  # interprocedural sources (see _link_calls)
     proven: tuple | None = None
     observed: tuple | None = None
 
@@ -236,6 +237,9 @@ class SSAFunction:
         nodes = nx.descendants(prog.cfg, entry) | {entry}
         self.g = prog.cfg.subgraph(nodes).copy()
         self.values: list[Value] = []
+        self.envs: dict[int, dict] = {}     # instruction address -> reg -> Value used
+        self.ret_vals: list[Value] = []     # r0 value at every return
+        self.calls: list[Ins] = []          # BL instructions in this function
         self._next = counter
         self._build()
 
@@ -287,6 +291,11 @@ class SSAFunction:
                         pushed.append(r)
             for x in blk(n):
                 env = {r: stacks[r][-1] for r in uses(x) if r in stacks}
+                self.envs[x.addr] = env
+                if x.op in ("ret", "pop_ret") and 0 in env:
+                    self.ret_vals.append(env[0])
+                if x.op == "bl":
+                    self.calls.append(x)
                 for r in defs(x):
                     if r == 15:
                         continue
@@ -351,6 +360,27 @@ class SSAProgram:
         cnt = itertools.count()
         self.funcs = {f: SSAFunction(prog, f, cnt) for f in sorted(prog.funcs)}
         self.values = [v for f in self.funcs.values() for v in f.values]
+        self.envs = {a: e for f in self.funcs.values() for a, e in f.envs.items()}
+        self.defval = {(v.ins.addr, v.reg): v for v in self.values if v.kind == "ins"}
+        self._link_calls()
+
+    def _link_calls(self):
+        """Interprocedural links for direct BL calls (B0): callee parameters r0-r3
+        are the join of the arguments at every call site, and the r0 produced by a
+        BL is the join of the callee's returned r0. The program entry keeps TOP
+        parameters (called from outside)."""
+        sites = {}
+        for f in self.funcs.values():
+            for x in f.calls:
+                sites.setdefault(x.target, []).append(self.envs[x.addr])
+                ret = self.defval.get((x.addr, 0))
+                if ret is not None and x.target in self.funcs:
+                    ret.links = list(self.funcs[x.target].ret_vals)
+        for fa, f in self.funcs.items():
+            if fa == self.prog.entry or fa not in sites:
+                continue
+            for r in range(4):
+                f.params[r].links = [env[r] for env in sites[fa] if r in env]
 
     def by_key(self):
         return {v.key: v for v in self.values if v.key}
@@ -365,6 +395,11 @@ def operand(v: Value, x):
 
 
 def transfer(v: Value):
+    if v.links is not None:
+        r = None
+        for a in v.links:
+            r = join(r, a.proven)
+        return r if v.links else TOP
     if v.kind == "param":
         return TOP
     if v.kind == "pi":
@@ -463,7 +498,7 @@ GIVE_UP = 40
 def analyze(ssa: SSAProgram):
     users = {v: [] for v in ssa.values}
     for v in ssa.values:
-        for d in list(v.env.values()) + list(v.args.values()):
+        for d in list(v.env.values()) + list(v.args.values()) + list(v.links or []):
             if isinstance(d, Value):
                 users[d].append(v)
     count = {v: 0 for v in ssa.values}
