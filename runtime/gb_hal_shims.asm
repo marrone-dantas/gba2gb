@@ -67,6 +67,18 @@ wSy: ds 1
 wVtmp: ds 2
 wVaddr: ds 2
 wVhalf: ds 1
+wAff: ds 1                    ; current object is affine (Compose)
+wAffG: ds 1
+wAffTile:: ds 1               ; Phase 4.1: OBJ tile of the displayed pre-rotated frame
+wAffWant:: ds 1               ; frame selected by HAL_AFFINE_SEL
+wAffHave:: ds 1               ; frame shown at wAffTile
+wAffCur:: ds 1                ; stream mode: frame being copied
+wAffLeft:: ds 1               ; stream mode: chunks left
+wAffBack:: ds 1               ; stream mode: back slot tile
+wAffUsed:: ds 1               ; slot tile used by the last Compose
+wAffShown:: ds 1              ; slot tile in the hardware OAM (set after the DMA)
+wAffSrc:: ds 2
+wAffDst:: ds 2
 
 SECTION "hal", ROM0
 HalStart:
@@ -88,6 +100,7 @@ HalStart:
     ld hl, $D000
     ld bc, $0300
     call MemClear                 ; shadow OAM, GBA OAM mirror, HAL state
+    call AffInit                  ; pre-rotated affine frames (LCD off; stub if unused)
     ld hl, DmaRoutine
     ld c, LOW(HRAM_DMA)
     ld b, DmaRoutineEnd - DmaRoutine
@@ -159,9 +172,12 @@ VBlankISR:
     jr z, .nodma
 .dma::
     call HRAM_DMA
+    ld a, [wAffUsed]
+    ld [wAffShown], a             ; the back slot is free only once the OAM stopped using it
     xor a
     ld [wDmaReady], a
 .nodma:
+    call AffStream                ; Phase 4.1 frame streaming (stub: ret)
     ld a, [wScx]
     ldh [rSCX], a
     ld a, [wScy]
@@ -360,6 +376,9 @@ Compose::
     cp $02
     jr z, .obj                    ; hidden
     ld a, b
+    and $01
+    ld [wAff], a                  ; affine object (double-size is rejected at bake time)
+    ld a, b
     and $C0
     ld [wShape], a
     push hl
@@ -375,8 +394,20 @@ Compose::
     ld c, a
     ld a, [hl+]                   ; attr1 high
     ld b, a
+    ld a, [wAff]
+    or a
+    jr z, .naff
+    ld a, b
+    rrca
+    and $1F
+    ld [wAffG], a                 ; affine group (one group supported, docs/affine.md)
+    xor a                         ; no flips: the baked frame is already transformed
+    jr .fl
+.naff:
+    ld a, b
     and $30                       ; hflip (bit 12) / vflip (bit 13)
     add a, a                      ; -> GB bits 5 / 6
+.fl:
     ld [wFlags], a
     ld a, b
     and $C0
@@ -408,6 +439,13 @@ Compose::
     or $10                        ; OBP1
     ld [wFlags], a
 .p0:
+    ld a, [wAff]
+    or a
+    jr z, .p1
+    ld a, [wAffTile]
+    ld [wTile], a
+    ld [wAffUsed], a
+.p1:
     ld a, [wShape]
     rrca
     rrca
@@ -430,6 +468,10 @@ Compose::
     ld [wW], a
     ld a, [hl]
     ld [wH], a
+    ld a, [wAff]
+    or a
+    ld a, [wW]
+    jr nz, .st                    ; baked frames are stored 1D
     ld a, [wDispcnt]
     and $40                       ; 1D mapping?
     ld a, [wW]

@@ -7,7 +7,7 @@ from pyboy import PyBoy
 GB_BUTTONS = {"a": "a", "b": "b", "select": "select", "start": "start", "right": "right",
               "left": "left", "up": "up", "down": "down"}
 WRITE_SITES = ("HAL_VRAM_STORE16.wrmap", "HAL_VRAM_STORE16.wrlo", "HAL_VRAM_STORE16.wrhi",
-               "MemClear.clr", "VBlankISR.dma")
+               "MemClear.clr", "VBlankISR.dma", "AffStream.cp", "AffStream.cpend")
 
 
 def read_sym(path):
@@ -32,6 +32,8 @@ class GBRun:
         self.pressed = set()
         if check_access:
             for s in WRITE_SITES:
+                if s not in self.sym:
+                    continue
                 b, a = self.sym[s]
                 self.pb.hook_register(b, a, self._check, s)
         self.cycles = {}
@@ -49,7 +51,7 @@ class GBRun:
         if not lcdc & 0x80:
             return
         mode = stat & 3
-        ok = (ly >= 144) if site == "VBlankISR.dma" else mode in (0, 1)
+        ok = (ly >= 144) if site in ("VBlankISR.dma", "AffStream.cp", "AffStream.cpend") else mode in (0, 1)
         if not ok:
             self.violations.append((site, ly, mode, self.frame()))
 

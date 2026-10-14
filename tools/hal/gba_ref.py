@@ -87,6 +87,34 @@ def bgr(c):
     return ((c & 31) * 255 // 31, ((c >> 5) & 31) * 255 // 31, ((c >> 10) & 31) * 255 // 31)
 
 
+def s16(v):
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def obj_pixels(vram, tile, w, h, oned=True):
+    """4bpp OBJ tiles -> rows of colour indices."""
+    out = []
+    for ty in range(h):
+        row = []
+        for tx in range(w):
+            t = tile + (ty // 8) * ((w // 8) if oned else 32) + tx // 8
+            b = vram[0x10000 + (t & 0x3FF) * 32 + (ty & 7) * 4 + (tx & 7) // 2]
+            row.append((b >> (4 * (tx & 1))) & 15)
+        out.append(row)
+    return out
+
+
+def affine_sample(src, w, h, P, xx, yy):
+    """GBA affine OBJ sampling (non-double box): texture = P * (screen - centre) + centre."""
+    pa, pb, pc, pd = P
+    dx, dy = xx - w // 2, yy - h // 2
+    tx = ((pa * dx + pb * dy) >> 8) + w // 2
+    ty = ((pc * dx + pd * dy) >> 8) + h // 2
+    if 0 <= tx < w and 0 <= ty < h:
+        return src[ty][tx]
+    return 0
+
+
 def render(s):
     from PIL import Image
     io, pal, vram, oam = s["io"], s["pal"], s["vram"], s["oam"]
@@ -119,6 +147,17 @@ def render(s):
             w, h = OBJ_SIZES.get((a0 >> 14, a1 >> 14), (8, 8))
             y0, x0 = a0 & 255, a1 & 511
             tile, pb = a2 & 0x3FF, a2 >> 12
+            if a0 & 0x100:          # affine (non-double-size box)
+                g = (a1 >> 9) & 31
+                P = [s16(u16(oam, 32 * g + 6 + 8 * j)) for j in range(4)]
+                src = obj_pixels(vram, tile, w, h, oned)
+                for yy in range(h):
+                    for xx in range(w):
+                        sx, sy = (x0 + xx) & 511, (y0 + yy) & 255
+                        ci = affine_sample(src, w, h, P, xx, yy)
+                        if ci and sx < 240 and sy < 160:
+                            pix[sx, sy] = bgr(u16(pal, 0x200 + 2 * (pb * 16 + ci)))
+                continue
             for yy in range(h):
                 for xx in range(w):
                     sx, sy = (x0 + xx) & 511, (y0 + yy) & 255

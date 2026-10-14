@@ -47,6 +47,27 @@ def obj16():
     return px
 
 
+def ship32():
+    """Asymmetric 32x32 'ship' for the affine demo (rotation must be visible)."""
+    px = [[0] * 32 for _ in range(32)]
+    for y in range(32):
+        for x in range(32):
+            # arrow pointing right: triangle body + tail fin + cockpit
+            if 6 <= x <= 27 and abs(y - 15.5) <= (27 - x) * 0.45 + 1:
+                px[y][x] = 2 if abs(y - 15.5) <= (27 - x) * 0.45 - 1 else 3
+            if 4 <= x <= 10 and 4 <= y <= 9:
+                px[y][x] = 3            # top fin only (breaks the mirror symmetry)
+    for y in range(13, 19):
+        for x in range(16, 21):
+            px[y][x] = 1                # cockpit
+    return px
+
+
+def sin_lut():
+    import math
+    return [int(round(256 * math.sin(2 * math.pi * i / 256))) & 0xFFFF for i in range(256)]
+
+
 def key_tiles():
     out = []
     for st in range(4):  # up, hit, released, held
@@ -113,6 +134,10 @@ def main():
     s.append(f"#define BRIN_TILE_WORDS {len(bt)}")
     s.append(arr("brin_tiles", "u32", bt))
     s.append(arr("brin_map", "u16", bm, "0x{:04X}"))
+    st = tiles_from_pixels(ship32(), 32, 32)
+    s.append(f"#define SHIP_TILE_WORDS {len(st)}")
+    s.append(arr("ship_tiles", "u32", st))
+    s.append(arr("sin_lut", "s16", sin_lut(), "(s16)0x{:04X}"))
     s.append("#endif")
     print("\n".join(s))
 

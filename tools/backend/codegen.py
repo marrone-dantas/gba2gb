@@ -281,6 +281,9 @@ class Gen:
             if st:
                 for i in range(n):
                     self.e(f"ldh a, [{h(rd + i)}]", f"ld [${0xD100 + o + i:04X}], a")
+                if o % 8 == 6 and (o % 32) // 8 in (0, 1):
+                    # OBJ_AFFINE pa / pb: select a pre-rotated frame (Phase 4.1, docs/affine.md)
+                    self.e("call HAL_AFFINE_SEL")
             else:
                 self.e(f"ld hl, ${0xD100 + o:04X}")
                 self.load_bytes(rd, n, signed)

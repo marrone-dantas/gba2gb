@@ -11,7 +11,7 @@ def u16(b, o):
     return b[o] | (b[o + 1] << 8)
 
 
-def compose(oam, nobj, dispcnt):
+def compose(oam, nobj, dispcnt, aff_tile=None):
     """GBA OAM bytes -> (40 GB OAM entries (y, x, tile, flags), dropped count, per-object
     list of expected (X_gb, Y_gb) for visible objects)."""
     out, dropped, origin = [], 0, {}
@@ -23,8 +23,12 @@ def compose(oam, nobj, dispcnt):
         X, Y = gb_x(a1 & 0x1FF), gb_y(a0 & 0xFF)
         origin[i] = (X, Y)
         hf, vf = bool(a1 & 0x1000), bool(a1 & 0x2000)
-        flags = (0x20 if hf else 0) | (0x40 if vf else 0) | (0x10 if a2 >> 12 else 0)
         stride = w if dispcnt & 0x40 else 32
+        if a0 & 0x100:                   # affine: pre-rotated frame at aff_tile, 1D, no flips
+            hf = vf = False
+            stride = w
+            a2 = (a2 & 0xF000) | (aff_tile & 0xFF)
+        flags = (0x20 if hf else 0) | (0x40 if vf else 0) | (0x10 if a2 >> 12 else 0)
         for r in range(h):
             for c in range(w):
                 sy, sx = Y + 8 * r, X + 8 * c

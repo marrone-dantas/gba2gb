@@ -19,7 +19,7 @@ def run(cmd):
         raise RuntimeError(f"{' '.join(cmd)}\n{r.stdout}{r.stderr}")
 
 
-def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False):
+def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False, affine=None):
     """prune: None (Phase 0), 'flags' (narrowed backend but all values 32-bit),
     'sound' (proven ranges) or 'profile' (observed ranges + guards; needs profile).
     hal: Phase 2 program mode (entry `main`, GB HAL runtime, intercepted I/O)."""
@@ -61,7 +61,7 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
             acc, info = lower.classify_phase0(prog)
         asm = generate_asm(prog, acc)
     if hal:
-        asm += lower.hal_sections(src, prog, info)
+        asm += lower.hal_sections(src, prog, info, affine)
         prog.hal_info = info
     with tempfile.TemporaryDirectory() as td:
         k = asm_out or os.path.join(td, "kernel.asm")

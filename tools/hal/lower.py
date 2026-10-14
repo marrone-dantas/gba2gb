@@ -18,7 +18,8 @@ def analyze(ssa):
     if nobj > 32:
         raise InterceptError("objects >= 32 are not supported by the GBA OAM mirror")
     cnt = bg0cnt(ssa, acc)
-    return acc, {"nobj": nobj, "bg0cnt": cnt, "warnings": warnings}
+    oam_st = {a: d for a, d in acc.items() if d["region"] == "oam" and d["store"]}
+    return acc, {"nobj": nobj, "bg0cnt": cnt, "warnings": warnings, "oam_stores": oam_st}
 
 
 def classify_phase0(prog):
@@ -31,7 +32,7 @@ def db(data):
     return ["    db " + ", ".join(f"${b:02X}" for b in data[i:i + 32]) for i in range(0, len(data), 32)]
 
 
-def hal_sections(elf_path, prog, info):
+def hal_sections(elf_path, prog, info, affine=None):
     with open(elf_path, "rb") as fh:
         elf = ELFFile(fh)
         sec = {s.name: s for s in elf.iter_sections()}
@@ -59,4 +60,7 @@ def hal_sections(elf_path, prog, info):
     L += [f"GbaObjCount:: db {info['nobj']}", f"GbaBgCbbHi:: db ${cbb * 0x40:02X}",
           f"GbaBgSbbHi:: db ${sbb * 8:02X}"]
     L += ['SECTION "arm_image", ROM0[$2000]', "ArmImage:"] + db(img)
-    return "\n".join(L) + "\n"
+    from tools.affine.affine_lut_baker import bake_program
+    aff_asm, rep = bake_program(elf_path, info["oam_stores"], **(affine or {}))
+    info["affine"] = rep
+    return "\n".join(L) + "\n" + aff_asm
