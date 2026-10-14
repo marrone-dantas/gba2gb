@@ -19,14 +19,14 @@ def run(cmd):
         raise RuntimeError(f"{' '.join(cmd)}\n{r.stdout}{r.stderr}")
 
 
-def build(src, out, entry="f", asm_out=None, prune=None, profile=None):
+def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None):
     """prune: None (Phase 0), 'flags' (narrowed backend but all values 32-bit),
     'sound' (proven ranges) or 'profile' (observed ranges + guards; needs profile)."""
     prog = lift_file(src, entry)
     if prune:
         from tools.prune.bitwidth_pruning import build_plan
         from tools.backend.narrow import generate_narrow_asm
-        plan = build_plan(prog, profile, "profile" if prune == "profile" else "sound")
+        plan = build_plan(prog, profile, "profile" if prune == "profile" else "sound", opts)
         if prune == "flags":
             plan.mode = "flags-only"
             plan.storage = {}

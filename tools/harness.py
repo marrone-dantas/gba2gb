@@ -46,11 +46,14 @@ class GB:
                 break
         self.pb.tick(1, False)
 
-    def run(self, regs):
+    def run(self, regs, fill=None):
+        """Run the kernel once. `fill`: byte written to the non-argument register
+        bytes (r4-r12, LR, PC) instead of 0 (used to measure HRAM usage)."""
         m = self.pb.memory
         for n, v in enumerate(list(regs) + [0] * 9 + [SP0, 0]):
             for i in range(4):
-                m[0xFF80 + 4 * n + i] = (v >> (8 * i)) & 0xFF
+                a = 0xFF80 + 4 * n + i
+                m[a] = fill if fill is not None and n >= 4 and n != 13 else (v >> (8 * i)) & 0xFF
         for a in range(0xFFC0, 0xFFC4):
             m[a] = 0
         m[0xFFD1] = 0
@@ -71,6 +74,16 @@ class GB:
         self.pb.stop(save=False)
 
 
+
+    def hram_touched(self, regs, patterns=(0xA5, 0x5A)):
+        """HRAM register-area bytes ($FF80-$FFBF) used in one run: bytes written by the
+        kernel plus the argument bytes (r0-r3) and SP, which the caller provides."""
+        m = self.pb.memory
+        used = {0xFF80 + i for i in range(16)} | {0xFFB4 + i for i in range(4)}
+        for pat in patterns:
+            self.run(regs, fill=pat)
+            used |= {a for a in range(0xFF90, 0xFFC0) if not 0xFFB4 <= a < 0xFFB8 and m[a] != pat}
+        return used
 
     def wram_touched(self, regs, patterns=(0xA5, 0x5A)):
         """Set of WRAM addresses ($C000-$DFFF) written during one run."""

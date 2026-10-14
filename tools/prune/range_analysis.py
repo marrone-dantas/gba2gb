@@ -240,6 +240,7 @@ class SSAFunction:
         self.envs: dict[int, dict] = {}     # instruction address -> reg -> Value used
         self.ret_vals: list[Value] = []     # r0 value at every return
         self.calls: list[Ins] = []          # BL instructions in this function
+        self.ret_envs: dict[int, dict] = {} # return address -> reg -> Value at the return
         self._next = counter
         self._build()
 
@@ -302,6 +303,9 @@ class SSAFunction:
                     v = self._new(reg=r, kind="ins", block=n, ins=x, env=env)
                     stacks[r].append(v)
                     pushed.append(r)
+                if x.op in ("ret", "pop_ret"):
+                    # full register state at the return (after pop_ret's restores)
+                    self.ret_envs[x.addr] = {r: st[-1] for r, st in stacks.items()}
             for s in g.successors(n):
                 edge_pi = {}
                 if g.in_degree(s) > 1:  # refine the phi argument on this edge
@@ -361,6 +365,8 @@ class SSAProgram:
         self.funcs = {f: SSAFunction(prog, f, cnt) for f in sorted(prog.funcs)}
         self.values = [v for f in self.funcs.values() for v in f.values]
         self.envs = {a: e for f in self.funcs.values() for a, e in f.envs.items()}
+        self.ret_envs = {a: e for f in self.funcs.values() for a, e in f.ret_envs.items()}
+        self.func_of = {v: fa for fa, f in self.funcs.items() for v in f.values}
         self.defval = {(v.ins.addr, v.reg): v for v in self.values if v.kind == "ins"}
         self._link_calls()
 

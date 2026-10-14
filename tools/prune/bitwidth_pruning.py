@@ -56,6 +56,8 @@ class Plan:
     fused: dict = field(default_factory=dict)      # addr -> (kind, src_reg, dead)
     deleted: set = field(default_factory=set)      # addresses of removed instructions
     fused_src: dict = field(default_factory=dict)  # addr -> source Value of a fused extension
+    frame: object = None                           # tools.prune.frame.Frame (save-slot elision)
+    opts: dict = field(default_factory=dict)
 
     def store(self, v):
         return self.storage.get(v, (4, "z"))
@@ -194,11 +196,18 @@ def fuse_extensions(plan: Plan):
 
 
 # ---------------------------------------------------------------- driver
-def build_plan(elf_or_prog, profile=None, mode="sound"):
+DEFAULT_OPTS = {"skip_lr": True, "entry_abi": "aapcs"}
+
+
+def build_plan(elf_or_prog, profile=None, mode="sound", opts=None):
+    """opts: skip_lr (Phase 1.5 item 1, default on): do not save LR on the emulated
+    stack; entry_abi ("aapcs" | "none", item 2, opt-in "none"): the entry function
+    need not preserve callee-saved registers."""
+    opts = {**DEFAULT_OPTS, **(opts or {})}
     prog = lift_file(elf_or_prog) if isinstance(elf_or_prog, str) else elf_or_prog
     ssa = ra.SSAProgram(prog)
     ra.analyze(ssa)
-    plan = Plan(ssa=ssa, mode=mode)
+    plan = Plan(ssa=ssa, mode=mode, opts=opts)
     if mode == "profile":
         if profile is None:
             raise ValueError("profile-guided mode needs a profile")
@@ -226,6 +235,9 @@ def build_plan(elf_or_prog, profile=None, mode="sound"):
             ra.analyze(ssa, assume)
     assign_storage(plan)
     fuse_extensions(plan)
+    if opts["skip_lr"] or opts["entry_abi"] != "aapcs":
+        from tools.prune.frame import Frame
+        plan.frame = Frame(ssa, opts["entry_abi"], opts["skip_lr"])
     return plan
 
 

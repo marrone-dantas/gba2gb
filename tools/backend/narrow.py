@@ -172,7 +172,9 @@ class NarrowGen(Gen):
             return self.mul(x, w, ext)
         if op in ("ldr", "ldrb", "ldrh", "ldrsb", "ldrsh", "str", "strb", "strh"):
             return self.mem(x, w, ext)
-        if op in ("ret", "pop_ret"):
+        if op in ("push", "pop", "pop_ret"):
+            return self.push_pop(x)
+        if op == "ret":
             self.ensure(x, 0, 4)
         if op == "bl":
             for r in (0, 1, 2, 3):
@@ -184,6 +186,48 @@ class NarrowGen(Gen):
             super().ins(x)
             return
         self.fallback(x)
+
+    def push_pop(self, x):
+        """PUSH/POP with save-slot elision (tools/prune/frame.py): skipped slots are
+        neither written by the push nor loaded by the pop (SP still moves)."""
+        fr = self.plan.frame
+        n = len(x.regs)
+        if x.op == "push":
+            skip = fr.skip_push.get(x.addr, set()) if fr else set()
+            for r in x.regs:
+                if r not in skip:
+                    self.ensure(x, r, 4)
+            self.ldimm(T1, 4 * n)
+            self.addsub("sub", R(13), T1, R(13), False)
+            if len(skip) < n:
+                self.hl_from(R(13))
+                for r in x.regs:
+                    if r in skip:
+                        self.e(f"; slot of r{r} elided", *["inc hl"] * 4)
+                    else:
+                        for i in range(4):
+                            self.e(f"ldh a, [{h(R(r) + i)}]", "ld [hl+], a")
+            self.defined(x, 13, 4)
+            self.stats["narrow_ops"] += 1
+            return
+        if x.op == "pop_ret":
+            self.ensure(x, 0, 4)
+        skip = fr.skip_pop.get(x.addr, set()) if fr else set()
+        if len(skip) < n:
+            self.hl_from(R(13))
+            for r in x.regs:
+                if r in skip:
+                    self.e(f"; r{r} restore elided", *["inc hl"] * 4)
+                else:
+                    for i in range(4):
+                        self.e("ld a, [hl+]", f"ldh [{h(R(r) + i)}], a")
+                    self.defined(x, r, 4)
+        self.ldimm(T1, 4 * n)
+        self.addsub("add", R(13), T1, R(13), False)
+        self.defined(x, 13, 4)
+        if x.op == "pop_ret":
+            self.e("ret")
+        self.stats["narrow_ops"] += 1
 
     def alu(self, x, op, w, ext):
         rd = R(x.rd)
