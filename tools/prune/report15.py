@@ -28,10 +28,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # (name, prune mode, opts) — cumulative; "phase1" is the Phase 1 B3 state
 CONFIGS = [
     ("phase0", None, None),
-    ("phase1", "sound", {"skip_lr": False, "frame_trim": False, "hram_alloc": False}),
-    ("+lr", "sound", {"frame_trim": False, "hram_alloc": False}),
-    ("+frame", "sound", {"hram_alloc": False}),
-    ("default", "sound", {}),                       # + item 4 (HRAM allocation)
+    ("phase1", "sound", {"entry_abi": "aapcs", "skip_lr": False, "frame_trim": False, "hram_alloc": False}),
+    ("+lr", "sound", {"entry_abi": "aapcs", "frame_trim": False, "hram_alloc": False}),
+    ("+frame", "sound", {"entry_abi": "aapcs", "hram_alloc": False}),
+    ("default", "sound", {"entry_abi": "aapcs"}),   # + item 4 (HRAM allocation), AAPCS
     ("entry-noalloc", "sound", {"entry_abi": "none", "hram_alloc": False}),
     ("entry", "sound", {"entry_abi": "none"}),
 ]

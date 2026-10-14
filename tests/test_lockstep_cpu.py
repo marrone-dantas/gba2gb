@@ -30,7 +30,7 @@ def seeds(name):
     return _seeds(name, SEEDS)
 
 
-MODES = ["phase0", "sound", "profile", "entry"]
+MODES = ["phase0", "sound", "profile", "aapcs"]
 
 
 def profile_for(elf):
@@ -49,8 +49,8 @@ def profile_for(elf):
 @pytest.mark.parametrize("kernel", KERNELS)
 def test_lockstep(kernel, mode):
     """phase0: Phase 0 backend; sound: proven-range pruning; profile: observed-range
-    pruning with guards (a guard firing fails the test); entry: sound + opt-in entry
-    ABI without callee-saved preservation (only R0 is compared, as for every mode)."""
+    pruning with guards (a guard firing fails the test); aapcs: sound with the
+    optional full AAPCS entry ABI (default is entry ABI "none") (only R0 is compared, as for every mode)."""
     import sys
     sys.path.insert(0, ROOT)
     from tools.backend.gba2gbc_core import build
@@ -58,8 +58,8 @@ def test_lockstep(kernel, mode):
     tag = "" if mode == "phase0" else "." + mode
     rom = os.path.join(BUILD, "roms", kernel + tag + ".gbc")
     prof = profile_for(elf) if mode == "profile" else None
-    prune = {"phase0": None, "entry": "sound"}.get(mode, mode)
-    opts = {"entry_abi": "none"} if mode == "entry" else None
+    prune = {"phase0": None, "aapcs": "sound"}.get(mode, mode)
+    opts = {"entry_abi": "aapcs"} if mode == "aapcs" else None
     build(elf, rom, asm_out=os.path.join(BUILD, "roms", kernel + tag + ".asm"),
           prune=prune, profile=prof, opts=opts)
     ref, gb = RefARM(elf), GB(rom)

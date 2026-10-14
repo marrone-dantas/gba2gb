@@ -137,3 +137,8 @@ Remaining limits:
   every ABI-visible value; the "keep only if not worse" check makes it a heuristic;
 * WRAM is measured over 3 seeds (pattern fill); HRAM is a static count of referenced
   bytes and always includes the argument slots R0-R3 and SP.
+
+**Decision (after Phase 1.5):** the entry ABI `none` is now the project default
+(`--entry-abi none`; `--entry-abi aapcs` remains available). The "entry" column above is
+therefore the default configuration; the "default ABI" column corresponds to
+`--entry-abi aapcs`. Lockstep runs the `aapcs` option as its own mode.

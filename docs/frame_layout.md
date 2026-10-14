@@ -10,7 +10,9 @@ live at a return. With the default ABI the registers live at a return are r0 and
 callee-saved r4-r11; LR is never live. `mov lr, r9; push {r7, lr}` (GCC saving r9 in
 the LR slot) is therefore still saved, because the value flows back into r9.
 
-## 2. Entry ABI opt-in (`--entry-abi none`)
+## 2. Entry ABI `none` (`--entry-abi none`, project default since the end of Phase 1.5)
+User decision: `none` is the default; `--entry-abi aapcs` keeps full AAPCS
+preservation of r4-r11 for callers that need it.
 For the **program entry only** (the kernel called by the game/harness), the registers
 live at its returns can be reduced to r0. The prologue/epilogue then skips saving and
 restoring r4-r11. **ABI implication:** the caller must treat r1-r12 and LR as clobbered

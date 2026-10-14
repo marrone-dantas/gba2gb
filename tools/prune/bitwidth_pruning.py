@@ -196,12 +196,13 @@ def fuse_extensions(plan: Plan):
 
 
 # ---------------------------------------------------------------- driver
-DEFAULT_OPTS = {"skip_lr": True, "entry_abi": "aapcs", "frame_trim": True, "hram_alloc": True}
+DEFAULT_OPTS = {"skip_lr": True, "entry_abi": "none", "frame_trim": True, "hram_alloc": True}
 
 
 def build_plan(elf_or_prog, profile=None, mode="sound", opts=None):
     """opts: skip_lr (Phase 1.5 item 1, default on): do not save LR on the emulated
-    stack; entry_abi ("aapcs" | "none", item 2, opt-in "none"): the entry function
+    stack; entry_abi ("none" | "aapcs", item 2; "none" is the project default since
+    Phase 1.5, "aapcs" keeps full AAPCS preservation): with "none" the entry function
     need not preserve callee-saved registers."""
     opts = {**DEFAULT_OPTS, **(opts or {})}
     prog = lift_file(elf_or_prog) if isinstance(elf_or_prog, str) else elf_or_prog
@@ -218,12 +219,16 @@ def build_plan(elf_or_prog, profile=None, mode="sound", opts=None):
         if profile is None:
             raise ValueError("profile-guided mode needs a profile")
         ra.merge_profile(ssa, profile)
+        from tools.prune.frame import Frame
+        useful = Frame(ssa, opts["entry_abi"], opts["skip_lr"], trim=False).useful
         assume = {}
         for _ in range(3):
             changed = False
             for v in ssa.values:
                 if v.kind != "ins" or v.observed is None or v in assume or v.reg in (13, 14):
                     continue
+                if v not in useful:
+                    continue  # never observable (e.g. copy of an elided restore): no guard
                 if getattr(v, "observed_derived", False) or v.ins.op in ("bl", "pop", "pop_ret", "ldm"):
                     continue  # call results / restored caller registers: harness artifacts
                 if v.ins.op == "mov" and isinstance(v.ins.a, str) and v.env.get(int(v.ins.a[1:])) is not None \
