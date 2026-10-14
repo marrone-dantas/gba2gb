@@ -333,22 +333,213 @@ FCmpFast:
 .un:
     ld a, 2
     ret
-NAT_idiv::
-    ld a, BANK(NAT_idiv_impl)
-    ld hl, NAT_idiv_impl
-    jp FarCall
-NAT_idivmod::
-    ld a, BANK(NAT_idivmod_impl)
-    ld hl, NAT_idivmod_impl
-    jp FarCall
+; Integer division fast paths (ROM0, no bank switch): divisor 1..65535 and, for the
+; signed forms, both operands in -65535..65535 except where noted -> 32/16 restoring
+; division in registers (Div16Step, unrolled). Everything else goes to the generic
+; bank-1 routine. Results are identical to libgcc's (tests/test_softfloat.py).
 NAT_uidiv::
+NAT_uidivmod::
+    ldh a, [HR_R1 + 2]
+    ld b, a
+    ldh a, [HR_R1 + 3]
+    or b
+    jr nz, .far
+    ldh a, [HR_R1]
+    ld c, a
+    ldh a, [HR_R1 + 1]
+    ld b, a
+    or c
+    jr z, .far
+    call UDiv32by16
+    jp PutQR
+.far:
     ld a, BANK(NAT_uidiv_impl)
     ld hl, NAT_uidiv_impl
     jp FarCall
-NAT_uidivmod::
-    ld a, BANK(NAT_uidivmod_impl)
-    ld hl, NAT_uidivmod_impl
+
+NAT_idiv::
+NAT_idivmod::
+    ; divisor: |R1| < 65536, != 0
+    ldh a, [HR_R1 + 3]
+    ld b, a
+    ldh a, [HR_R1 + 2]
+    cp b
+    jp nz, .far                   ; bytes 2-3 must be 0000 or FFFF
+    inc a
+    jr z, .dneg
+    dec a
+    jp nz, .far
+    ldh a, [HR_R1]
+    ld c, a
+    ldh a, [HR_R1 + 1]
+    ld b, a
+    or c
+    jp z, .far
+    xor a
+    jr .dvd
+.dneg:
+    ldh a, [HR_R1]
+    cpl
+    add a, 1
+    ld c, a
+    ldh a, [HR_R1 + 1]
+    cpl
+    adc a, 0
+    ld b, a
+    or c
+    jp z, .far                    ; -65536
+    ld a, $80
+.dvd:
+    ld [sfSq], a                  ; quotient sign
+    ldh a, [HR_R0 + 3]
+    bit 7, a
+    jr z, .pos
+    ; negative dividend: negate all 32 bits (INT_MIN -> generic path)
+    ld hl, HR_R0
+    ld a, [hl]
+    cpl
+    add a, 1
+    ld [hl+], a
+    ld a, [hl]
+    cpl
+    adc a, 0
+    ld [hl+], a
+    ld a, [hl]
+    cpl
+    adc a, 0
+    ld [hl+], a
+    ld a, [hl]
+    cpl
+    adc a, 0
+    ld [hl], a
+    bit 7, a
+    jr nz, .min
+    ld a, [sfSq]
+    xor $80
+    ld [sfSq], a
+    ld a, $80
+    jr .sr
+.pos:
+    xor a
+.sr:
+    ld [sfSr], a                  ; remainder sign = dividend sign
+    call UDiv32by16
+    ; quotient (HR_R0) and remainder (de) with signs
+    ld a, [sfSq]
+    or a
+    call nz, NegR0
+    ld a, [sfSr]
+    or a
+    jr z, PutR
+    ld a, e
+    cpl
+    add a, 1
+    ldh [HR_R1], a
+    ld a, d
+    cpl
+    adc a, 0
+    ldh [HR_R1 + 1], a
+    ld a, $FF
+    jr nc, .rh
+    ld a, e
+    or d
+    ld a, $FF
+    jr nz, .rh
+    xor a
+.rh:
+    ldh [HR_R1 + 2], a
+    ldh [HR_R1 + 3], a
+    ret
+.min:
+    ld hl, HR_R0                  ; restore INT_MIN (negation is its own inverse)
+    xor a
+    ld [hl+], a
+    ld [hl+], a
+    ld [hl+], a
+    ld [hl], $80
+.far:
+    ld a, BANK(NAT_idivmod_impl)
+    ld hl, NAT_idivmod_impl
     jp FarCall
+
+; quotient already in HR_R0; de = remainder -> R1 (unsigned)
+PutQR:
+PutR:
+    ld a, e
+    ldh [HR_R1], a
+    ld a, d
+    ldh [HR_R1 + 1], a
+    xor a
+    ldh [HR_R1 + 2], a
+    ldh [HR_R1 + 3], a
+    ret
+
+NegR0:
+    ld hl, HR_R0
+    ld a, [hl]
+    cpl
+    add a, 1
+    ld [hl+], a
+    REPT 3
+    ld a, [hl]
+    cpl
+    adc a, 0
+    ld [hl+], a
+    ENDR
+    ret
+
+; HR_R0 (unsigned 32) / bc (1..65535): quotient -> HR_R0, remainder -> de.
+UDiv32by16:
+    ld hl, 0
+    ldh a, [HR_R0 + 2]
+    ld e, a
+    ldh a, [HR_R0 + 3]
+    ld d, a
+    or e
+    jr z, .lo                     ; high half 0: quotient high = 0, remainder 0
+    call Div16Step
+    ld a, e
+    ldh [HR_R0 + 2], a
+    ld a, d
+    ldh [HR_R0 + 3], a
+.lo:
+    ldh a, [HR_R0]
+    ld e, a
+    ldh a, [HR_R0 + 1]
+    ld d, a
+    call Div16Step
+    ld a, e
+    ldh [HR_R0], a
+    ld a, d
+    ldh [HR_R0 + 1], a
+    ld d, h
+    ld e, l
+    ret
+
+; (hl:de) / bc with hl < bc: de = quotient (16 bits), hl = remainder.
+Div16Step:
+    REPT 16
+    sla e
+    rl d
+    rl l
+    rl h
+    jr c, .sub\@                ; 17-bit partial remainder >= divisor
+    ld a, l
+    sub c
+    ld a, h
+    sbc b
+    jr c, .nx\@
+.sub\@:
+    ld a, l
+    sub c
+    ld l, a
+    ld a, h
+    sbc b
+    ld h, a
+    inc e
+.nx\@:
+    ENDR
+    ret
 NAT_lmul::
     ld a, BANK(NAT_lmul_impl)
     ld hl, NAT_lmul_impl
