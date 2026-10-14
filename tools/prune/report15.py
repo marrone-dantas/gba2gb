@@ -71,7 +71,7 @@ def span(addrs, lo, hi):
 
 def measure(kernel, nseeds, wseeds, configs):
     elf = os.path.join(ROOT, "build", "kernels", kernel + ".elf")
-    prof = trace_kernel(elf, nseeds, os.path.join(ROOT, "build", "profiles", kernel + ".json"))
+    prof = trace_kernel(elf, nseeds, os.path.join(ROOT, "build", "profiles", f"{kernel}.s{nseeds}.json"))
     ref = RefARM(elf)
     ss = seeds(kernel, nseeds)
     exp = [ref.run(s) for s in ss]

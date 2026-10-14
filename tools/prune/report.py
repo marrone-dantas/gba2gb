@@ -51,8 +51,7 @@ def reg_bytes(elf, mode, prof):
 
 def measure(kernel, nseeds, wseeds):
     elf = os.path.join(ROOT, "build", "kernels", kernel + ".elf")
-    pdir = os.path.join(ROOT, "build", "profiles")
-    ppath = os.path.join(pdir, kernel + ".json")
+    ppath = os.path.join(ROOT, "build", "profiles", f"{kernel}.s{nseeds}.json")
     prof = trace_kernel(elf, nseeds, ppath)
     ref = RefARM(elf)
     ss = seeds(kernel, nseeds)

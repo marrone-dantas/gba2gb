@@ -37,10 +37,12 @@ def profile_for(elf):
     from tools.profile.range_tracer import trace_kernel
     name = os.path.basename(elf)[:-4]
     p = os.path.join(BUILD, "profiles", name + ".json")
-    if not os.path.exists(p) or os.path.getmtime(p) < os.path.getmtime(elf):
-        trace_kernel(elf, SEEDS, p)
     import json
-    return json.load(open(p))
+    if os.path.exists(p) and os.path.getmtime(p) >= os.path.getmtime(elf):
+        prof = json.load(open(p))
+        if prof.get("seeds") == SEEDS:  # a profile from another seed count is not reused
+            return prof
+    return trace_kernel(elf, SEEDS, p)
 
 
 @pytest.mark.parametrize("mode", MODES)
