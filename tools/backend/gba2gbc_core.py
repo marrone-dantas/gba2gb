@@ -59,6 +59,10 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
     _lift.EXTRA_NATIVES.update((port or {}).get("overrides", {}))
     saved_memo = dict(_lift.MEMO)
     saved_clone = dict(_lift.CLONE)
+    saved_dec = dict(_lift.DECIMATE)
+    if port and port.get("overrides") is not None:
+        _lift.DECIMATE.update(n=int(port.get("render_every", 2)),
+                              render=set(port.get("draw_calls", [])) | set(port.get("present_calls", [])))
     _lift.CLONE["enabled"] = bool(port and port.get("specialize", _lift.CLONE.get("default", False)) and port.get("overrides") is not None)
     _lift.MEMO.clear()
     if port and port.get("memo", True) and port.get("overrides") is not None:
@@ -83,6 +87,8 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         _lift.EXTRA_NATIVES.update(saved[1])
         _lift.MEMO.clear()
         _lift.MEMO.update(saved_memo)
+        _lift.DECIMATE.clear()
+        _lift.DECIMATE.update(saved_dec)
         _lift.CLONE.clear()
         _lift.CLONE.update(saved_clone)
 
@@ -177,6 +183,9 @@ def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole
     asm += divc_asm(getattr(prog, "divc", set()))
     from tools.lift.memo import asm as memo_asm
     asm += memo_asm(getattr(prog, "memo_used", {}))
+    from tools.lift.decimate import asm as decim_asm
+    from tools.lift import lift as _lft
+    asm += decim_asm(getattr(prog, "decim", []), _lft.DECIMATE["n"])
     with tempfile.TemporaryDirectory() as td:
         k = asm_out or os.path.join(td, "kernel.asm")
         open(k, "w").write(asm)

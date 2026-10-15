@@ -202,6 +202,8 @@ MEMO: dict[str, tuple] = {}
 # exact argument values. Clone k lives at original + CLONE_DELTA + k * 16 MiB.
 CLONE = {"enabled": False, "default": False, "max_ins": 160, "per_func": 4, "total": 48}
 CLONE_DELTA = 0x08000000
+# Step 10 render decimation (tools/lift/decimate.py): render every n-th frame.
+DECIMATE = {"n": 1, "render": set()}
 
 
 def _override(name):
@@ -250,6 +252,10 @@ class Program:
             self._specialize()
         self._build_cfg()
         self.divc = set()
+        self.decim = []
+        if natives and DECIMATE["n"] > 1:
+            from tools.lift import decimate
+            self.decim = decimate.apply(self, DECIMATE["n"], DECIMATE["render"])
         self.memo_used = {}
         if natives and MEMO:
             self._memo()

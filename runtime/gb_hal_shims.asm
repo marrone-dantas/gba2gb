@@ -173,7 +173,10 @@ wRcK: ds 1
 
 wVsLast:: ds 1
 wMemoOk:: ds 1                ; memo cache valid (tools/lift/memo.py); 0 after a VRAM store
-wMemoKey:: ds 8                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
+wMemoKey:: ds 8
+wDecimCnt:: ds 1              ; render decimation phase (tools/lift/decimate.py)
+wDecimLogic:: ds 2            ; frame-loop iterations (logic frames)
+wDecimDrawn:: ds 2            ; rendered frames                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
 
 SECTION "obj_state", WRAMX[$D800]
 ; Phase P1: one byte per GBA object: bit 0 live (ever stored), bit 1 dirty (changed

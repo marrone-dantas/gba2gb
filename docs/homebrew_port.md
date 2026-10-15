@@ -97,3 +97,12 @@ before a `bl`) its own copy of the callee (at most `CLONE["per_func"]` per funct
 `CLONE["total"]` overall, non-recursive bodies up to `CLONE["max_ins"]` instructions),
 so range analysis sees exact argument values. Off by default: on the reference
 homebrew the extra code cost more (bank switches) than the narrowing gained.
+
+## Render decimation (logic/render split)
+
+`tools/lift/decimate.py` finds the frame loop of the entry function (the loop with a
+VBlank wait) and its render calls: calls whose callee reaches a port drawing or
+presenting call (`draw_calls`, `present_calls`). If the loop also makes logic calls,
+render call sites go through `NAT_decim_<k>` stubs and run only every
+`render_every`-th frame (default 2; 1 disables). Logic runs every frame. Counters:
+`wDecimLogic` (logic frames) and `wDecimDrawn` (rendered frames).

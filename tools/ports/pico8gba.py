@@ -107,7 +107,7 @@ def port_config(inc_dir, display_bg=1, profile=False, cosmetic={"cap": 0}):
     return {"overrides": dict(OVERRIDES), "asm": [PORT_ASM], "inc": inc_dir,
             "defines": ["PORT_OAM", "PORT_BGMAP", "ROM_SRAM", "VRAM_SHADOW"] + (["PROFILE"] if profile else []),
             "rom_sram": True, "vram_shadow": True, "display_bg": display_bg, "port_init": True,
-            "draw_calls": ["spr"], "cosmetic": dict(cosmetic) if cosmetic is not None else None}
+            "draw_calls": ["spr"], "present_calls": ["update_screen"], "cosmetic": dict(cosmetic) if cosmetic is not None else None}
 
 
 def build_port(elf, out, prune="sound", display_bg=1, profile=False, hotspots=None, cosmetic={"cap": 0}, **kw):
