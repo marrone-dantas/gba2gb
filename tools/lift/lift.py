@@ -55,6 +55,7 @@ class Image:
         # Thumb functions whose address is stored as data (vtables, function pointers):
         # possible targets of indirect calls (Program._decode, tools/lift/icall.py)
         self.taken = set(taken or ())
+        self.extra = []            # [(addr, bytes)] other allocated sections (jump tables)
 
     @classmethod
     def from_elf(cls, path):
@@ -68,14 +69,18 @@ class Image:
                     entries[s.name] = s["st_value"] & ~1
                     if s["st_value"] & 1 and base <= s["st_value"] < base + len(data):
                         thumb.add(s["st_value"])
-            taken = set()
+            taken, extra = set(), []
             for sec in elf.iter_sections():
+                if sec["sh_type"] == "SHT_PROGBITS" and sec["sh_flags"] & 2 and sec.name != ".text":
+                    extra.append((sec["sh_addr"], sec.data()))
                 if sec["sh_type"] == "SHT_PROGBITS" and sec["sh_flags"] & 2 and thumb:
                     d = sec.data()
                     for (w,) in struct.iter_unpack("<I", d[:len(d) & ~3]):
                         if w in thumb:
                             taken.add(w & ~1)
-        return cls(data, base, entries, taken)
+        img = cls(data, base, entries, taken)
+        img.extra = extra
+        return img
 
     @classmethod
     def from_bin(cls, path, base=0x08000000, entry=0x08000000):
@@ -83,7 +88,12 @@ class Image:
 
     def word(self, addr):
         o = addr - self.base
-        return struct.unpack_from("<I", self.data, o)[0]
+        if 0 <= o <= len(self.data) - 4:
+            return struct.unpack_from("<I", self.data, o)[0]
+        for a, d in self.extra:
+            if a <= addr <= a + len(d) - 4:
+                return struct.unpack_from("<I", d, addr - a)[0]
+        raise LiftError(f"no data at {addr:#x}")
 
 
 def _reg(md, r):
@@ -140,6 +150,9 @@ def convert(md, img: Image, i) -> Ins:
         return ins
     if mn == "nop":
         return ins
+    if mn == "udf":            # __builtin_trap / unreachable: hang in place
+        ins.op, ins.target = "b", i.address
+        return ins
     if mn in ("svc", "swi"):  # BIOS call: handled by the GB HAL (tools/hal/intercept.py)
         ins.op, ins.a = "swi", ops[0][1]
         return ins
@@ -166,6 +179,12 @@ def convert(md, img: Image, i) -> Ins:
     else:
         raise LiftError(f"unsupported instruction: {ins.text} @ {i.address:#x}")
     ins.op = base
+    if base == "mov" and ops[0] == ("r", 15) and ops[1][0] == "r":
+        if ops[1][1] == 14:
+            ins.op = "ret"                 # mov pc, lr
+        else:
+            ins.op, ins.a = "ijmp", f"r{ops[1][1]}"   # resolved by Program._jump_table
+        return ins
     if base == "adr":
         ins.op, ins.rd, ins.a = "mov", ops[0][1], ((i.address + 4) & ~3) + ops[1][1]
         return ins
@@ -216,6 +235,8 @@ CLONE = {"enabled": False, "default": False, "max_ins": 160, "per_func": 4, "tot
 CLONE_DELTA = 0x08000000
 # Step 10 render decimation (tools/lift/decimate.py): render every n-th frame.
 DECIMATE = {"n": 1, "render": set()}
+# Switch jump tables (Program._jump_table): compare chains at synthetic addresses.
+JT_BASE = 0x0E000000
 # Indirect calls (tools/lift/icall.py): `bl` to a `bx rN` stub becomes `call NAT_icall_rN`,
 # a run-time dispatch over the functions whose address is taken (Image.taken).
 ICALL = {"enabled": True}
@@ -261,6 +282,7 @@ class Program:
         self.idioms = natives and os.environ.get("GBA2GB_IDIOMS", "1") not in ("0", "")
         self.funcs = {self.entry}
         self.icalls = set()
+        self.jtabs = []
         self.cfg = nx.DiGraph()
         self._decode()
         self.clones = {}
@@ -286,6 +308,102 @@ class Program:
         if i is None:
             raise LiftError(f"failed to decode at {addr:#x}")
         return convert(self.md, self.img, i)
+
+    def _back(self, a, n=48):
+        """Straight-line predecessors of a (already decoded), nearest first."""
+        out = []
+        for _ in range(n):
+            prev = next((p for p in (a - 2, a - 4) if p in self.ins and p + self.ins[p].size == a), None)
+            if prev is None or prev in self.funcs:
+                if prev is not None:
+                    out.append(self.ins[prev])
+                break
+            out.append(self.ins[prev])
+            a = prev
+        return out
+
+    def _jump_table(self, x):
+        """`ldr rT, [rB, rI]; mov pc, rT` (gcc Thumb-1 switch, rI = 4 * case, bounded by
+        `cmp case, #N` + `bhi`/`bls`, rB = table address from a literal): the computed
+        jump becomes `b` into a compare chain at a synthetic address (JT_BASE + k * 1 KiB)
+        that branches to each case target. Returns the case targets."""
+        t = int(x.a[1:])
+        back = self._back(x.addr)
+        ld = next((i for i in back if t in (i.rd,) and i.op != "cmp"), None)
+        if ld is None or ld.op != "ldr" or not ld.mem or ld.mem[1] is None:
+            raise LiftError(f"unresolved computed jump {x.text} @ {x.addr:#x}")
+        rb, ri, _ = ld.mem
+        f = max((fa for fa in self.funcs if fa <= x.addr), default=x.addr)
+
+        def const_def(r, start, depth=0):
+            """Nearest earlier definition of r by address within the function (the base
+            is typically set before the switch's loop; the table contents are validated
+            below); register copies are followed."""
+            for a in range(start - 2, max(f, start - 0x1000) - 2, -2):
+                i = self.ins.get(a)
+                if i is None:
+                    continue
+                if i.op == "bl" or (i.op in ("pop", "ldm") and r in i.regs):
+                    return None
+                if i.rd == r and i.op not in ("cmp", "cmn", "tst", "str", "strb", "strh", "stm", "ldm"):
+                    if i.op == "mov" and isinstance(i.a, int) and i.b is None:
+                        return i.a
+                    if i.op == "mov" and isinstance(i.a, str) and depth < 4:
+                        return const_def(int(i.a[1:]), a, depth + 1)
+                    return None
+            return None
+        base = const_def(rb, ld.addr)
+        if base is None:
+            rb, ri = ri, rb           # ldr rT, [rI, rB]
+            base = const_def(rb, ld.addr)
+        if base is None:
+            raise LiftError(f"jump table base not constant @ {x.addr:#x}")
+        n = None
+        for k, i in enumerate(back):
+            if i.op == "bcc" and i.cond in ("hi", "ls"):
+                c = back[k + 1] if k + 1 < len(back) else None
+                if c is not None and c.op == "cmp" and isinstance(c.b, int):
+                    n = c.b + 1
+                    break
+        fend = min((e for e in self.img.entries.values() if e > x.addr), default=x.addr + 0x4000)
+        inside = lambda w: f <= (w & ~1) < fend
+        if n is None:
+            # no explicit bound (index of an enum type): the entries that point into the
+            # function, up to the first one that does not
+            tg = []
+            while len(tg) < 256:
+                try:
+                    w = self.img.word(base + 4 * len(tg))
+                except LiftError:
+                    break
+                if not inside(w):
+                    break
+                tg.append(w)
+            if not tg:
+                raise LiftError(f"jump table bound not found @ {x.addr:#x}")
+        else:
+            if n > 512:
+                raise LiftError(f"jump table too large @ {x.addr:#x}")
+            tg = [self.img.word(base + 4 * k) for k in range(n)]
+        if not all(inside(w) for w in tg):
+            raise LiftError(f"jump table entries are not code of the function @ {x.addr:#x}")
+        tg = [w & ~1 for w in tg]
+        k = len(self.jtabs)
+        sa = JT_BASE + 0x400 * k
+        self.jtabs.append(x.addr)
+        x.op, x.target, x.a = "b", sa, None
+        # the table load becomes `mov rT, rI`: the chain compares the scaled index, so
+        # the table itself is never read at run time
+        ld.op, ld.a, ld.b, ld.mem = "mov", f"r{ri}", None, None
+        ld.text += "  ; jump table index"
+        for j, w in enumerate(tg[:-1]):
+            a = sa + 4 * j
+            self.ins[a] = Ins(a, 2, "cmp", f"cmp r{t}, #{4 * j}  ; jump table @{x.addr:#x}",
+                              s=True, a=f"r{t}", b=4 * j)
+            self.ins[a + 2] = Ins(a + 2, 2, "bcc", f"beq {w:#x}", cond="eq", target=w)
+        a = sa + 4 * (len(tg) - 1)
+        self.ins[a] = Ins(a, 2, "b", f"b {tg[-1]:#x}", target=tg[-1])
+        return tg
 
     def _call_via(self, t):
         """Register of a `bx rN` call-via stub at t (Thumb-1 indirect call: `bl stub`
@@ -316,6 +434,8 @@ class Program:
             while a not in self.ins:
                 x = self._decode_one(a)
                 self.ins[a] = x
+                if x.op == "ijmp":
+                    work.extend(self._jump_table(x))
                 if x.op == "bl" and ICALL["enabled"] and x.target not in self.natives:
                     r = self._call_via(x.target)
                     if r is not None:            # indirect call through rN

@@ -80,3 +80,49 @@ def test_dispatch_runs(tmp_path):
             assert gb.run(regs)[0] == ((regs[1] + 1) if regs[0] else regs[1] * 3)
     finally:
         gb.stop()
+
+
+def test_udf_is_a_trap_loop():
+    import capstone as cs
+    from tools.lift.lift import convert, Image
+    md = cs.Cs(cs.CS_ARCH_ARM, cs.CS_MODE_THUMB)
+    md.detail = True
+    i = next(md.disasm(b"\xff\xde", 0x08000010, 1))
+    x = convert(md, Image(b"\xff\xde", 0x08000010, {}), i)
+    assert x.op == "b" and x.target == 0x08000010
+
+
+SRC_SW = r'''
+__attribute__((noinline)) int g(int k, int x) {
+    switch (k) { case 0: return x + 7; case 1: return x * 5; case 2: return x - 3; case 3: return x ^ 9;
+                 case 4: return x << 2; case 5: return x >> 1; case 6: return 100 - x; default: return 1; }
+}
+extern "C" int f(int k, int x) { return g(k, x); }
+'''
+
+
+def test_jump_table_runs(tmp_path):
+    for t in ("arm-none-eabi-g++", "rgbasm"):
+        if not shutil.which(t):
+            pytest.skip(f"{t} missing")
+    pytest.importorskip("pyboy")
+    c, out = tmp_path / "s.cpp", tmp_path / "s.elf"
+    c.write_text(SRC_SW)
+    subprocess.run(["arm-none-eabi-g++", "-mcpu=arm7tdmi", "-mthumb", "-O2", "-nostdlib", "-fno-exceptions",
+                    "-fno-rtti", "-Wl,-e,f", "-Wl,-Ttext=0x08000000", "-Wl,-Tdata=0x03000000",
+                    str(c), "-o", str(out), "-lgcc"], check=True)
+    p = lift_file(str(out), "f")
+    if not p.jtabs:
+        pytest.skip("compiler did not emit a jump table")
+    from tools.backend.gba2gbc_core import build
+    from tools.harness import GB
+    rom = str(tmp_path / "s.gb")
+    build(str(out), rom, entry="f")
+    gb = GB(rom)
+    exp = [lambda x: x + 7, lambda x: x * 5, lambda x: x - 3, lambda x: x ^ 9, lambda x: x << 2,
+           lambda x: x >> 1, lambda x: 100 - x]
+    try:
+        for k in range(9):
+            assert gb.run((k, 20))[0] == (exp[k](20) if k < 7 else 1) & 0xFFFFFFFF
+    finally:
+        gb.stop()
