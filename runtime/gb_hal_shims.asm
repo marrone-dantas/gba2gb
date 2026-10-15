@@ -177,7 +177,12 @@ wMemoKey:: ds 8
 wDecimCnt:: ds 1              ; render decimation phase (tools/lift/decimate.py)
 wDecimLogic:: ds 2            ; frame-loop iterations (logic frames)
 wDecimDrawn:: ds 2            ; rendered frames
-wRomBuf:: ds 4                ; ROM_BANKED: word read from the banked GBA ROM image                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
+wRomBuf:: ds 4                ; ROM_BANKED: word read from the banked GBA ROM image
+wDmaSad:: ds 4                ; DMA3 source / destination / count (HAL_WR_DMA3CNT)
+wDmaDad:: ds 4
+wDmaCnt:: ds 2
+wDmaCtl:: ds 1
+wDmaCtlLo:: ds 1                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
 
 SECTION "obj_state", WRAMX[$D800]
 ; Phase P1: one byte per GBA object: bit 0 live (ever stored), bit 1 dirty (changed
@@ -2411,3 +2416,132 @@ HAL_ROMB_ADDR::
     ld hl, wRomBuf
     ret
 ENDC
+
+; DMA3 (0x040000D4-0x040000DF): immediate transfers are run at once, unit by unit,
+; through the run-time dispatch (HAL_DYN_ADDR / HAL_DYN_STORE), so copies into VRAM,
+; palette and OAM go through the same shims as CPU stores. Source/destination
+; "fixed" modes are honoured; repeat / timed (VBlank, HBlank, FIFO) starts are ignored.
+HAL_WR_DMA3SAD::
+    ld hl, wDmaSad
+    jr DmaSet4
+HAL_WR_DMA3DAD::
+    ld hl, wDmaDad
+DmaSet4:
+    ld b, 4
+.l:
+    ldh a, [c]
+    ld [hl+], a
+    inc c
+    dec b
+    jr nz, .l
+    ret
+
+HAL_WR_DMA3CNT::                  ; 32-bit write: count (low 16) + control (high 16)
+    ldh a, [c]
+    ld [wDmaCnt], a
+    inc c
+    ldh a, [c]
+    ld [wDmaCnt + 1], a
+    inc c
+    ; fall through with c -> control half word
+HAL_WR_DMA3CNT_H::
+    inc c
+    ldh a, [c]                    ; control bits 8-15
+    dec c
+    bit 7, a
+    ret z                         ; not enabled
+    ld b, a
+    and $30                       ; start timing (bits 12-13)
+    ret nz                        ; only immediate transfers
+    ld a, b
+    ld [wDmaCtl], a
+    ldh a, [c]                    ; control bits 0-7: bits 5-6 dest ctrl, bit 7 src ctrl lo
+    ld e, a
+    ld a, e
+    ld [wDmaCtlLo], a
+    ld a, [wDmaCnt]
+    ld l, a
+    ld a, [wDmaCnt + 1]
+    ld h, a
+    or l
+    ret z
+.unit:
+    push hl
+    ld hl, wDmaSad
+    call DmaT1
+    call HAL_DYN_ADDR
+    ld de, HR_T2
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    ld a, [wDmaCtl]
+    bit 2, a
+    jr z, .h16
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    ld a, [hl]
+    ld [de], a
+.h16:
+    ld hl, wDmaDad
+    call DmaT1
+    ld a, [wDmaCtl]
+    bit 2, a
+    ld e, 2
+    jr z, .w2
+    ld e, 4
+.w2:
+    ld c, LOW(HR_T2)
+    push de
+    call HAL_DYN_STORE
+    pop de
+    ld a, [wDmaCtlLo]
+    ; advance: dest unless fixed (ctrl bits 5-6 = 2), source unless fixed (bits 7-8 = 2)
+    ld b, a
+    and $60
+    cp $40
+    jr z, .nod
+    ld hl, wDmaDad
+    call DmaAdd
+.nod:
+    ld a, [wDmaCtl]
+    and 1
+    jr nz, .nos                   ; src ctrl bit 8 set: fixed (2) or prohibited (3)
+    ld hl, wDmaSad
+    call DmaAdd
+.nos:
+    pop hl
+    dec hl
+    ld a, h
+    or l
+    jr nz, .unit
+    ret
+
+DmaT1:                            ; HR_T1 = 4 bytes at hl
+    ld a, [hl+]
+    ldh [HR_T1], a
+    ld a, [hl+]
+    ldh [HR_T1 + 1], a
+    ld a, [hl+]
+    ldh [HR_T1 + 2], a
+    ld a, [hl]
+    ldh [HR_T1 + 3], a
+    ret
+
+DmaAdd:                           ; 32-bit [hl] += e
+    ld a, [hl]
+    add a, e
+    ld [hl+], a
+    ld a, [hl]
+    adc a, 0
+    ld [hl+], a
+    ld a, [hl]
+    adc a, 0
+    ld [hl+], a
+    ld a, [hl]
+    adc a, 0
+    ld [hl], a
+    ret

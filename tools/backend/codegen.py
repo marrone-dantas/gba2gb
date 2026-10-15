@@ -276,7 +276,8 @@ class Gen:
     # ---- Phase 2: statically intercepted accesses (tools/hal/intercept.py) ----
     IO_WR = {0x000: "DISPCNT", 0x00A: "BG1CNT", 0x010: "BG0HOFS", 0x012: "BG0VOFS",
              0x0BC: "DMA1SAD", 0x0C6: "DMA1CNT_H", 0x100: "TM0D", 0x102: "TM0CNT_H",
-             0x104: "TM1D", 0x106: "TM1CNT_H"}
+             0x104: "TM1D", 0x106: "TM1CNT_H",
+             0x0D4: "DMA3SAD", 0x0D8: "DMA3DAD", 0x0DC: "DMA3CNT", 0x0DE: "DMA3CNT_H"}
     IO_RD = {0x006: "VCOUNT", 0x100: "TM0D", 0x104: "TM1D", 0x130: "KEYINPUT"}
 
     def load_bytes(self, rd, n, signed):
