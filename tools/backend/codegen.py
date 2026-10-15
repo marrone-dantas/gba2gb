@@ -196,7 +196,10 @@ class Gen:
             self.copy(rd, T0)
             return
         if op == "swi":
-            self.e("call HAL_VBLANKINTRWAIT")  # the only BIOS call accepted by the interceptor
+            if x.a == 5:
+                self.e("call HAL_VBLANKINTRWAIT")  # the only BIOS call implemented by the HAL
+            else:
+                self.e(f"; BIOS call swi {x.a} ignored (not implemented by the HAL)")
             return
         if x.addr in self.hal and self.hal[x.addr]["region"] != "ram":
             return self.hal_mem(x)

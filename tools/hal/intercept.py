@@ -159,14 +159,21 @@ def classify(ssa, strict=False):
             return "dyn:oam"        # Phase 5 B3: OAM through a pointer -> run-time dispatch to the mirror
         reg = remap(reg, st)
         if (reg == "rom" and st) or (reg in ("pal", "vram") and not st) or reg == "io":
-            errors.append(f"{a:#010x}: {x.text}: {reg} access through a non-constant pointer not supported")
-            return None
+            if strict:
+                errors.append(f"{a:#010x}: {x.text}: {reg} access through a non-constant pointer not supported")
+                return None
+            # run-time dispatch: I/O and ROM stores are ignored, unreadable spaces read 0
+            warnings.append(f"{a:#010x}: {x.text}: {reg} access through a pointer -> run-time dispatch")
+            return "dyn"
         return reg
     acc, errors, warnings = {}, [], []
     for a, x in sorted(ssa.prog.ins.items()):
         if x.op == "swi":
             if x.a not in SWIS:
-                errors.append(f"{a:#010x}: unsupported BIOS call swi {x.a}")
+                if strict:
+                    errors.append(f"{a:#010x}: unsupported BIOS call swi {x.a}")
+                else:
+                    warnings.append(f"{a:#010x}: unsupported BIOS call swi {x.a} ignored")
             continue
         if x.op in ("ldm", "stm") and x.rd != 13:
             env = ssa.envs.get(a, {})
@@ -178,8 +185,11 @@ def classify(ssa, strict=False):
             if reg is None and not iv:
                 continue
             if iv and reg is None:
-                errors.append(f"{a:#010x}: {x.text}: address range {iv[0]:#x}-{iv[1]:#x} spans regions")
-                continue
+                if strict:
+                    errors.append(f"{a:#010x}: {x.text}: address range {iv[0]:#x}-{iv[1]:#x} spans regions")
+                    continue
+                warnings.append(f"{a:#010x}: {x.text}: address range {iv[0]:#x}-{iv[1]:#x} spans regions -> dyn")
+                reg = "dyn"
             if reg and reg.split(":")[0] not in ("ram", "rom", "vram", "dyn", "ewram", "vsh") or (reg == "rom" and x.op == "stm") or \
                     (reg == "vram" and x.op == "ldm"):
                 errors.append(f"{a:#010x}: {x.text}: {reg} block transfer not supported")
@@ -213,8 +223,13 @@ def classify(ssa, strict=False):
         const = lo if hi - lo == n - 1 else None
         if reg is None:
             touches = any(lo <= b and a0 <= hi for nm, a0, b in REGIONS if nm in ("io", "oam"))
-            if touches or (lo >= 0x02000000 and hi < 0x0A000000):
-                errors.append(f"{a:#010x}: {x.text}: unresolvable address range {lo:#x}-{hi:#x}")
+            if touches or (lo >= 0x02000000 and hi < 0x0A000000) or hi > 0xFFFFFFFF:
+                if strict:
+                    errors.append(f"{a:#010x}: {x.text}: unresolvable address range {lo:#x}-{hi:#x}")
+                    continue
+                # range analysis lost the region (wrapped or mixed ranges): run-time dispatch
+                warnings.append(f"{a:#010x}: {x.text}: unresolvable address range {lo:#x}-{hi:#x} -> dyn")
+                acc[a] = {"region": "dyn", "const": None, "width": n, "store": x.op.startswith("str"), "oam": False}
                 continue
             reg = "ram"
         if reg == "oam" and const is None:
@@ -223,7 +238,11 @@ def classify(ssa, strict=False):
             continue
         reg = remap(reg, st)
         if reg == "io" and const is None:
-            errors.append(f"{a:#010x}: {x.text}: non-constant {reg.upper()} address {lo:#x}-{hi:#x}")
+            if strict:
+                errors.append(f"{a:#010x}: {x.text}: non-constant {reg.upper()} address {lo:#x}-{hi:#x}")
+                continue
+            warnings.append(f"{a:#010x}: {x.text}: non-constant I/O address {lo:#x}-{hi:#x} -> dyn (ignored)")
+            acc[a] = {"region": "dyn", "const": None, "width": n, "store": st, "oam": False}
             continue
         if (reg == "rom" and st) or (reg in ("pal", "vram") and not st):
             errors.append(f"{a:#010x}: {x.text}: {'store to ROM' if st else 'read of ' + reg.upper()} not supported")

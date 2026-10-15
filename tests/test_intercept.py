@@ -51,12 +51,20 @@ def compile_c(tmp_path, src):
     return str(out)
 
 
-def test_nonconstant_io_is_compile_error(tmp_path):
+def test_nonconstant_io_is_compile_error(tmp_path, monkeypatch):
+    # strict mode: a compile error; default: run-time dispatch (the store is ignored)
     e = compile_c(tmp_path, "int main(void){ u32 i = REG_KEYINPUT & 7;"
                             " ((volatile u16 *)0x04000000)[i] = 1; while (1) ; }")
+    monkeypatch.setenv("GBA2GB_STRICT_PTR", "1")
     with pytest.raises(InterceptError) as ex:
         build(e, str(tmp_path / "t.gbc"), entry="main", prune="sound", hal=True)
     assert "non-constant IO address" in str(ex.value) and "0x080" in str(ex.value)
+    monkeypatch.delenv("GBA2GB_STRICT_PTR")
+    ssa = ra.SSAProgram(lift_file(e, "main"))
+    ra.analyze(ssa)
+    acc, warnings = classify(ssa)
+    assert any("non-constant I/O address" in w for w in warnings)
+    assert any(v["region"] == "dyn" and v["store"] for v in acc.values())
 
 
 def test_nonconstant_oam_is_dynamic(tmp_path):
@@ -73,8 +81,13 @@ def test_nonconstant_oam_is_dynamic(tmp_path):
     assert os.path.getsize(tmp_path / "t.gbc") > 0
 
 
-def test_unsupported_bios_call_is_error(tmp_path):
+def test_unsupported_bios_call_is_error(tmp_path, monkeypatch):
+    # strict mode only; by default the call is ignored with a warning
     e = compile_c(tmp_path, 'int main(void){ __asm__ volatile("swi 6"); while (1) ; }')
+    ssa = ra.SSAProgram(lift_file(e, "main"))
+    ra.analyze(ssa)
+    assert any("swi 6" in w for w in classify(ssa)[1])
+    monkeypatch.setenv("GBA2GB_STRICT_PTR", "1")
     with pytest.raises(InterceptError) as ex:
         build(e, str(tmp_path / "t.gbc"), entry="main", prune="sound", hal=True)
     assert "swi 6" in str(ex.value)
