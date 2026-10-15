@@ -484,10 +484,25 @@ ENDC
     ld a, b
     sub e
     cp 8                          ; only while polling (small steps of the LUT)
-    jr nc, .vok
+    jr nc, .vbig
+.vinc:
     ld a, e
     inc a
     ld b, a
+    jr .vok
+.vbig:                            ; larger step: never skip lines 160 / 161 (VBlank start)
+    ld a, e
+    cp 161
+    jr nc, .vok
+    ld a, b
+    cp 161
+    jr c, .vok
+    ld a, e
+    cp 160
+    jr c, .v160
+    jr .vinc
+.v160:
+    ld b, 160
 .vok:
     ld a, b
     cp 160
