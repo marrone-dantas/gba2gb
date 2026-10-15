@@ -198,6 +198,8 @@ def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole
             run(["rgbasm", "-DHAL", "-I", RUNTIME, "-o", ro, os.path.join(RUNTIME, "runtime.asm")])
             ho = os.path.join(td, "hal.o")
             defs = [f"-D{d}" for d in (port or {}).get("defines", [])]
+            if "HAL_WR_DMA3" in asm:
+                defs.append("-DDMA3")      # DMA3 shims only when used (ROM0 space)
             run(["rgbasm", *defs, "-I", RUNTIME, "-o", ho, os.path.join(RUNTIME, "gb_hal_shims.asm")])
             objs.append(ho)
             for i, pa in enumerate((port or {}).get("asm", [])):

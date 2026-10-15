@@ -2417,7 +2417,8 @@ HAL_ROMB_ADDR::
     ret
 ENDC
 
-; DMA3 (0x040000D4-0x040000DF): immediate transfers are run at once, unit by unit,
+IF DEF(DMA3)
+; DMA3 (0x040000D4-0x040000DF, assembled when the program writes them: -DDMA3): immediate transfers are run at once, unit by unit,
 ; through the run-time dispatch (HAL_DYN_ADDR / HAL_DYN_STORE), so copies into VRAM,
 ; palette and OAM go through the same shims as CPU stores. Source/destination
 ; "fixed" modes are honoured; repeat / timed (VBlank, HBlank, FIFO) starts are ignored.
@@ -2545,3 +2546,4 @@ DmaAdd:                           ; 32-bit [hl] += e
     adc a, 0
     ld [hl], a
     ret
+ENDC
