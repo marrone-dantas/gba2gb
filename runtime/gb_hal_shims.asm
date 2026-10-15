@@ -478,9 +478,13 @@ ENDC
     ; every GBA line value is seen and polls for an exact VCOUNT such as
     ; `while (VCOUNT != 160)` terminate; larger steps and a new frame are taken as is
     ld a, [wLastVc]
+    ld e, a
+    sub 160                       ; 160 / 161 are always followed by the next line, even
+    cp 2                          ; when the read after VBlank start was delayed (Compose)
+    jr c, .vinc
+    ld a, e
     cp b
     jr nc, .vok
-    ld e, a
     ld a, b
     sub e
     cp 8                          ; only while polling (small steps of the LUT)
