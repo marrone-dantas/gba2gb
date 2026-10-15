@@ -101,3 +101,28 @@ Files:
 * The 64-digit wave mode is not supported. A wave bank switch retriggers channel 3,
   which resets its phase.
 * Sound register reads return 0.
+
+## Audio off (generic audio subsystem removal)
+
+`build(..., audio=False)` (the default for HAL builds; `audio=True` or
+`GBA2GB_AUDIO=1` restores the Phase 4.3 path) removes a program's sound work
+without game knowledge. tools/audio/strip.py scans the ELF's functions:
+
+* **name** – sound libraries by symbol: maxmod (`mm*`, `mpp_*`), m4a / Sappy
+  (`m4a*`, `MPlay*`, `SoundMain`, `SoundVSync*`, `ply_*`, `CgbSound*`, ...),
+  Krawall, AAS, plus common game entry points (`sfx`, `music`, `play_sound`, ...;
+  C++ names are demangled to their base name);
+* **regs** – literal pool references to sound registers 0x04000060-0x040000AB
+  (PSG, SOUNDCNT, wave RAM, FIFO A/B) and to no display / keypad / system
+  register (a generic init that also clears the APU is kept);
+* **wrapper** – transitively, a function whose every BL goes to audio functions
+  and which stores nothing outside its stack frame.
+
+Every BL to a detected function becomes `call NAT_audio_nop` (a `ret`), so the
+bodies are not lifted. The backend drops writes to 0x04000060-0x040000A7 and to
+the DMA1/DMA2 registers (sound FIFO feeding); TM0CNT_H keeps only the timer
+clock, so the 256 Hz SFX timer interrupt is never enabled; the DirectSound
+reference run and conversion are skipped. Limits: register accesses through a
+base register built without a literal (`movs r3, #0x80; lsls r3, #19`) are not
+seen by the **regs** rule; IRQ handlers installed by pointer (e.g. `mmVBlank`
+via `irqSet`) are not lifted anyway (the HAL owns the GB interrupts).

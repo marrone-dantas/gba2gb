@@ -2060,6 +2060,10 @@ MarkObj::
 ; Phase P1 idiom -> HAL (tools/lift/idioms.py "objsetpos"): obj_set_pos(r0 = obj,
 ; r1 = x, r2 = y): attr0 = (attr0 & ~$FF) | (y & $FF), attr1 = (attr1 & ~$1FF) | (x & $1FF).
 ; Leaves r1 = x & $1FF, r2 = y & $FF, r3 = new attr1, like the Thumb body.
+; audio off (tools/audio/strip.py): every BL to a detected audio function lands here
+NAT_audio_nop::
+    ret
+
 NAT_objsetpos::
     ldh a, [HR_R0 + 3]
     cp $07

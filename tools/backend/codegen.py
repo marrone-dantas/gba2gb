@@ -6,6 +6,7 @@ computed with ARM semantics. Shifts and MUL call runtime routines
 (runtime/runtime.asm)."""
 from __future__ import annotations
 from tools.lift.lift import Program, LiftError
+from tools.hal.intercept import CONFIG
 
 R = lambda n: 0xFF80 + 4 * n
 FN, FZ, FC, FV = 0xFFC0, 0xFFC1, 0xFFC2, 0xFFC3
@@ -340,7 +341,15 @@ class Gen:
         if reg == "io":
             off = acc["const"] - 0x04000000
             name = (self.IO_WR if st else self.IO_RD).get(off)
-            if st and 0x60 <= off < 0xA0:
+            if st and not CONFIG.get("audio", True) and (0x60 <= off < 0xA8 or 0xBC <= off < 0xD4 or
+                                                         off == 0x102):
+                # audio off (tools/audio/strip.py): no APU mapping, no DirectSound DMA;
+                # TM0CNT_H only keeps the timer clock
+                if off == 0x102:
+                    self.e(f"ld c, LOW({h(rd)})", "call HAL_WR_TM0CNT_TIMER")
+                else:
+                    self.e(f"; sound I/O write to {off:#05x} dropped (audio off)")
+            elif st and 0x60 <= off < 0xA0:
                 # GBA sound registers + wave RAM -> DMG APU (Phase 4.3, docs/audio.md)
                 self.e(f"ld c, LOW({h(rd)})", f"ld b, ${off:02X}", f"ld e, {n}", "call HAL_SND_WR")
             elif name and st:

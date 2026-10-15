@@ -15,9 +15,9 @@ def elf(name):
     return os.path.join(ROOT, "build", "demos", name + ".elf")
 
 
-def build_demo(name, prune="sound"):
+def build_demo(name, prune="sound", audio=True):
     make()
     out = os.path.join(ROOT, "build", "demos_gb", name + ".gbc")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    prog = build(elf(name), out, entry="main", asm_out=out[:-4] + ".asm", prune=prune, hal=True)
+    prog = build(elf(name), out, entry="main", asm_out=out[:-4] + ".asm", prune=prune, hal=True, audio=audio)
     return out, prog

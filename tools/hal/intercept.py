@@ -37,7 +37,9 @@ SRAM_BANK = 0x2000      # Phase 5 A2: EWRAM -> MBC5 SRAM, bank = (addr >> 13) & 
 # EWRAM, so EWRAM data must then live above the image, e.g. 0x02018000 = bank 12);
 # CONFIG["vram_shadow"] keeps a copy of GBA VRAM 0x06000000-0x06007FFF (BG tiles/maps)
 # in SRAM banks 8-11 so the game can read its BG maps back (region "vsh").
-CONFIG = {"rom_sram": False, "vram_shadow": False}
+# CONFIG["audio"] False: the audio subsystem is removed (tools/audio/strip.py); sound
+# and FIFO-DMA register writes are dropped by the backend.
+CONFIG = {"rom_sram": False, "vram_shadow": False, "audio": True}
 
 
 def ewram_bank(lo, hi):

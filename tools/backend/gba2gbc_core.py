@@ -20,27 +20,41 @@ def run(cmd):
 
 
 def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False, affine=None,
-          peephole=None, port=None):
+          peephole=None, port=None, audio=None):
     """port: homebrew port description (docs/homebrew_port.md), a dict with
     overrides {function: native}, asm [port runtime files], defines [rgbasm -D for the
-    HAL], rom_sram, vram_shadow, display_bg, port_init. Implies hal=True."""
+    HAL], rom_sram, vram_shadow, display_bg, port_init. Implies hal=True.
+    audio (HAL builds): False (default; GBA2GB_AUDIO=1 turns it on) removes the audio
+    subsystem: the functions found by tools/audio/strip.py become empty natives and
+    sound / FIFO-DMA register writes are dropped (docs/audio.md, "Audio off")."""
     if port:
-        from tools.lift import lift as _lift
-        from tools.hal import intercept as _ic
-        saved = dict(_ic.CONFIG), dict(_lift.EXTRA_NATIVES)
+        hal = True
+    if audio is None:
+        audio = os.environ.get("GBA2GB_AUDIO", "0") not in ("0", "")
+    if not hal:
+        return _build(src, out, entry, asm_out, prune, profile, opts, False, affine, peephole, None)
+    from tools.lift import lift as _lift
+    from tools.hal import intercept as _ic
+    saved = dict(_ic.CONFIG), dict(_lift.EXTRA_NATIVES)
+    _lift.EXTRA_NATIVES.clear()
+    _ic.CONFIG["audio"] = bool(audio)
+    if not audio:
+        from tools.audio.strip import detect
+        found = detect(src, entry)
+        _lift.EXTRA_NATIVES.update({n: "audio_nop" for n in found})
+    for k in ("rom_sram", "vram_shadow", "display_bg", "port_init"):
+        if port and k in port:
+            _ic.CONFIG[k] = port[k]
+    _lift.EXTRA_NATIVES.update((port or {}).get("overrides", {}))
+    try:
+        prog = _build(src, out, entry, asm_out, prune, profile, opts, True, affine, peephole, port)
+        prog.audio_stubs = {} if audio else found
+        return prog
+    finally:
+        _ic.CONFIG.clear()
+        _ic.CONFIG.update(saved[0])
         _lift.EXTRA_NATIVES.clear()
-        _lift.EXTRA_NATIVES.update(port.get("overrides", {}))
-        for k in ("rom_sram", "vram_shadow", "display_bg", "port_init"):
-            if k in port:
-                _ic.CONFIG[k] = port[k]
-        try:
-            return _build(src, out, entry, asm_out, prune, profile, opts, True, affine, peephole, port)
-        finally:
-            _ic.CONFIG.clear()
-            _ic.CONFIG.update(saved[0])
-            _lift.EXTRA_NATIVES.clear()
-            _lift.EXTRA_NATIVES.update(saved[1])
-    return _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole, None)
+        _lift.EXTRA_NATIVES.update(saved[1])
 
 
 def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole, port):

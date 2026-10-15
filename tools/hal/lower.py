@@ -121,7 +121,10 @@ def hal_sections(elf_path, prog, info, affine=None):
     aff_asm, rep = bake_program(elf_path, info["oam_stores"], **(affine or {}))
     info["affine"] = rep
     from tools.audio.dsound_convert import convert_program, stub_asm
-    if any(d["region"] == "io" and d["store"] and d["const"] == 0x040000BC for d in info["io_stores"].values()):
+    from tools.hal.intercept import CONFIG as _cfg
+    if not _cfg.get("audio", True):
+        snd_asm, srep = stub_asm(), {"sfx": [], "off": True}
+    elif any(d["region"] == "io" and d["store"] and d["const"] == 0x040000BC for d in info["io_stores"].values()):
         from tools.hal.gba_ref import GBARef
         ref = GBARef(elf_path)
         ref.run([0] * 400, 400)
