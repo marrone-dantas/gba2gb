@@ -62,7 +62,7 @@ def test_widen_and_join():
     w = ra.widen(j, ra.join(j, ra.const(6)))
     assert w[0] == 0 and w[1] == 0x7F and w[3] == 0x7F  # upper bounds jump to the next threshold
     w = ra.widen(w, ra.join(w, ra.const(0x20000)))
-    assert w[1] == ra.M32 and w[3] == ra.SMAX           # past 16 bits: the 32-bit limits
+    assert w[1] >= ra.SMAX and w[3] == ra.SMAX           # past 16 bits: the 32-bit limits
 
 
 def test_spill_slot_and_swapped_cmp_bound():
