@@ -55,6 +55,7 @@ class Image:
         # Thumb functions whose address is stored as data (vtables, function pointers):
         # possible targets of indirect calls (Program._decode, tools/lift/icall.py)
         self.taken = set(taken or ())
+        self.inits = []            # static constructors (.init_array), run before the entry
         self.extra = []            # [(addr, bytes)] other allocated sections (jump tables)
 
     @classmethod
@@ -69,7 +70,11 @@ class Image:
                     entries[s.name] = s["st_value"] & ~1
                     if s["st_value"] & 1 and base <= s["st_value"] < base + len(data):
                         thumb.add(s["st_value"])
-            taken, extra = set(), []
+            taken, extra, inits = set(), [], []
+            ia = elf.get_section_by_name(".init_array")
+            if ia is not None and ia["sh_type"] == "SHT_INIT_ARRAY":
+                d = ia.data()
+                inits = [w & ~1 for (w,) in struct.iter_unpack("<I", d[:len(d) & ~3]) if w in thumb]
             for sec in elf.iter_sections():
                 if sec["sh_type"] == "SHT_PROGBITS" and sec["sh_flags"] & 2 and sec.name != ".text":
                     extra.append((sec["sh_addr"], sec.data()))
@@ -80,6 +85,7 @@ class Image:
                             taken.add(w & ~1)
         img = cls(data, base, entries, taken)
         img.extra = extra
+        img.inits = inits
         return img
 
     @classmethod
@@ -276,6 +282,8 @@ class Program:
         self.md.detail = True
         self.ins: dict[int, Ins] = {}
         self.entry = img.entries[entry]
+        self.entry_name = entry
+        self.inits = []
         self.natives = native_targets(img.entries) if natives else {}
         # Phase P1: idiom -> HAL lifting (tools/lift/idioms.py); GBA2GB_IDIOMS=0 disables
         import os
@@ -420,6 +428,11 @@ class Program:
 
     def _decode(self):
         work = [self.entry]
+        if self.entry_name == "main":
+            # program mode: static constructors run before main (codegen KernelEntry)
+            self.inits = [a for a in self.img.inits if a not in self.natives]
+            self.funcs.update(self.inits)
+            work += self.inits
         roots = False
         while work or (self.icalls and not roots):
             if not work:

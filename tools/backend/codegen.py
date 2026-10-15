@@ -473,7 +473,12 @@ class Gen:
         self.out = []
         ho = getattr(self.hal, "hoist", {}) if self.hal else {}
         # pass 1: per-function groups of (label, lines)
-        groups = [[("KernelEntry", [f"    jp L_{self.p.entry:08X}"])]]
+        ent = []
+        for a in getattr(self.p, "inits", []):     # static constructors (.init_array)
+            self.out = []
+            self.ldimm(R(14), 1)
+            ent += self.out + [f"    call L_{a:08X}"]
+        groups = [[("KernelEntry", ent + [f"    jp L_{self.p.entry:08X}"])]]
         for x in self.p.ordered():
             prefix = []
             lab = None

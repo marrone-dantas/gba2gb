@@ -53,7 +53,7 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         from tools.audio.strip import detect
         found = detect(src, entry)
         _lift.EXTRA_NATIVES.update({n: "audio_nop" for n in found})
-    for k in ("rom_sram", "vram_shadow", "display_bg", "port_init", "oam_drop"):
+    for k in ("rom_sram", "rom_banked", "vram_shadow", "display_bg", "port_init", "oam_drop"):
         if port and k in port:
             _ic.CONFIG[k] = port[k]
     _lift.EXTRA_NATIVES.update((port or {}).get("overrides", {}))

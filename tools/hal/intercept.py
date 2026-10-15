@@ -39,7 +39,11 @@ SRAM_BANK = 0x2000      # Phase 5 A2: EWRAM -> MBC5 SRAM, bank = (addr >> 13) & 
 # in SRAM banks 8-11 so the game can read its BG maps back (region "vsh").
 # CONFIG["audio"] False: the audio subsystem is removed (tools/audio/strip.py); sound
 # and FIFO-DMA register writes are dropped by the backend.
-CONFIG = {"rom_sram": False, "vram_shadow": False, "audio": True}
+# CONFIG["rom_banked"]: the whole GBA ROM image (all load segments, up to 4 MiB) is
+# stored in MBC5 ROM banks 256.. and every ROM load goes through the run-time dispatch,
+# which copies the word through a WRAM buffer (HAL_ROMB_ADDR); for large images
+# (graphics and level data read from ROM) that do not fit SRAM.
+CONFIG = {"rom_sram": False, "vram_shadow": False, "audio": True, "rom_banked": False}
 
 
 def ewram_bank(lo, hi):
@@ -52,6 +56,8 @@ def ewram_bank(lo, hi):
 
 def remap(reg, st):
     """Region after the large-image options (rom -> ewram, vram load -> vsh)."""
+    if reg == "rom" and not st and CONFIG.get("rom_banked"):
+        return "dyn"
     if reg == "rom" and not st and CONFIG["rom_sram"]:
         return "ewram"
     if reg == "vram" and not st and CONFIG["vram_shadow"]:

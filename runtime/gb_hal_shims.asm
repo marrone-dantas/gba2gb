@@ -176,7 +176,8 @@ wMemoOk:: ds 1                ; memo cache valid (tools/lift/memo.py); 0 after a
 wMemoKey:: ds 8
 wDecimCnt:: ds 1              ; render decimation phase (tools/lift/decimate.py)
 wDecimLogic:: ds 2            ; frame-loop iterations (logic frames)
-wDecimDrawn:: ds 2            ; rendered frames                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
+wDecimDrawn:: ds 2            ; rendered frames
+wRomBuf:: ds 4                ; ROM_BANKED: word read from the banked GBA ROM image                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
 
 SECTION "obj_state", WRAMX[$D800]
 ; Phase P1: one byte per GBA object: bit 0 live (ever stored), bit 1 dirty (changed
@@ -2024,7 +2025,9 @@ ENDC
     or HIGH(wGbaOAM)
     jr .lo
 .rom:
-IF DEF(ROM_SRAM)
+IF DEF(ROM_BANKED)
+    jp HAL_ROMB_ADDR              ; GBA ROM image in MBC5 banks 256..
+ELIF DEF(ROM_SRAM)
     jr .ew                        ; ARM image copied to SRAM banks 0.. at boot
 ELSE
     ldh a, [HR_T1 + 1]
@@ -2349,3 +2352,46 @@ HAL_DYN_STORE::
     cp 4
     jp z, HAL_VRAM_STORE32
     ret
+
+IF DEF(ROM_BANKED)
+; GBA ROM address T1 -> the 4 bytes at it, copied from MBC5 bank 256 + (offset >> 14)
+; ($4000 | offset & $3FFF) to wRomBuf; hl = wRomBuf. The caller's ROM bank (wRomBank)
+; is mapped again before returning. Images up to 4 MiB (offset bit 22 ignored above).
+HAL_ROMB_ADDR::
+    ldh a, [HR_T1 + 2]
+    add a, a
+    add a, a
+    ld b, a
+    ldh a, [HR_T1 + 1]
+    rlca
+    rlca
+    and 3
+    or b
+    ld [$2000], a
+    ld a, 1
+    ld [$3000], a
+    ldh a, [HR_T1 + 1]
+    and $3F
+    or $40
+    ld h, a
+    ldh a, [HR_T1]
+    ld l, a
+    ld de, wRomBuf
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    ld a, [hl]
+    ld [de], a
+    xor a
+    ld [$3000], a
+    ld a, [wRomBank]
+    ld [$2000], a
+    ld hl, wRomBuf
+    ret
+ENDC

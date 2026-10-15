@@ -2,6 +2,7 @@
 ROM0 sections of a HAL program (.data/.bss initialisation, ARM image for ROM loads,
 compile-time HAL configuration). See docs/hal.md."""
 from __future__ import annotations
+import os
 from elftools.elf.elffile import ELFFile
 from tools.prune import range_analysis as ra
 from tools.hal.intercept import classify, bg0cnt, InterceptError
@@ -58,7 +59,12 @@ def hal_sections(elf_path, prog, info, affine=None):
         data = sec[".data"].data() if ".data" in sec else b""
         dvma = sec[".data"]["sh_addr"] if ".data" in sec else 0x03000000
         bss = (sec[".bss"]["sh_addr"], sec[".bss"]["sh_size"]) if ".bss" in sec else (0x03000000, 0)
-        ew = (sec[".ewram"]["sh_addr"], sec[".ewram"]["sh_size"]) if ".ewram" in sec else (0x02000000, 0)
+        # every allocated EWRAM section (.ewram data, NOBITS .sbss / heap-start padding):
+        # the SRAM banks of the whole span are cleared at boot
+        ews = [(s_["sh_addr"], s_["sh_size"]) for s_ in elf.iter_sections()
+               if s_["sh_flags"] & 2 and 0x02000000 <= s_["sh_addr"] < 0x02040000 and s_["sh_size"]]
+        ew = (min(a for a, _ in ews), max(a + n for a, n in ews) - min(a for a, _ in ews)) if ews \
+            else (0x02000000, 0)
     if ew[1] and not (0x02000000 <= ew[0] and sum(ew) <= 0x02020000):
         raise InterceptError(f"EWRAM data at {ew[0]:#x}+{ew[1]:#x} outside the 128 KiB mapped to MBC5 SRAM")
     for vma, size in ((dvma, len(data)), bss):
@@ -68,7 +74,8 @@ def hal_sections(elf_path, prog, info, affine=None):
     from tools.hal.intercept import CONFIG
     img = prog.img.data
     rom_sram = CONFIG["rom_sram"]
-    if prog.img.base != 0x08000000 or (len(img) > ARM_IMAGE_MAX and not rom_sram):
+    rom_banked = CONFIG.get("rom_banked")
+    if prog.img.base != 0x08000000 or (len(img) > ARM_IMAGE_MAX and not rom_sram and not rom_banked):
         raise InterceptError(f"ARM image of {len(img)} bytes does not fit the 8 KiB ROM0 window")
     if rom_sram:
         lim = (ew[0] - 0x02000000) if ew[1] else 0x10000
@@ -112,7 +119,9 @@ def hal_sections(elf_path, prog, info, affine=None):
     L += [f"GbaObjCount:: db {info['nobj']}", f"GbaBgCbbHi:: db ${cbb * 0x40:02X}",
           f"GbaBgSbbHi:: db ${sbb * 8:02X}", f"GbaBg0Prio:: db {prio}",
           f"GbaView:: db {view}", f"GbaShadow:: db {1 if view and not ew[1] else 0}", "GbaFollow:: db 0", "GbaPinLo:: db 66", "GbaPinHi:: db 76"]
-    if rom_sram:
+    if rom_banked:
+        L += rom_banked_sections(elf_path)
+    elif rom_sram:
         for k in range(0, len(img), 0x2000):
             L += [f'SECTION "arm_image_{k // 0x2000}", ROMX', f"ArmImg{k // 0x2000}:"] + db(img[k:k + 0x2000])
     else:
@@ -133,3 +142,39 @@ def hal_sections(elf_path, prog, info, affine=None):
         snd_asm, srep = stub_asm(), {"sfx": []}
     info["audio"] = srep
     return "\n".join(L) + "\n" + aff_asm + snd_asm
+
+
+ROMB_FIRST = 256        # first MBC5 bank of the banked GBA ROM image (HAL_ROMB_ADDR)
+
+
+def rom_image(elf_path):
+    """The GBA cartridge image (load addresses of all PT_LOAD segments in ROM)."""
+    with open(elf_path, "rb") as fh:
+        elf = ELFFile(fh)
+        segs = [(sg["p_paddr"], sg.data()) for sg in elf.iter_segments()
+                if sg["p_type"] == "PT_LOAD" and 0x08000000 <= sg["p_paddr"] < 0x0A000000 and sg["p_filesz"]]
+    end = max(a + len(d) for a, d in segs) - 0x08000000
+    img = bytearray(end)
+    for a, d in segs:
+        img[a - 0x08000000:a - 0x08000000 + len(d)] = d
+    return bytes(img)
+
+
+def rom_banked_sections(elf_path):
+    """ROMX sections at banks ROMB_FIRST.. holding the GBA ROM image (INCBIN of a file
+    written next to the system temp directory, keyed by the image hash)."""
+    import hashlib, tempfile
+    img = rom_image(elf_path)
+    if len(img) > 0x400000:
+        raise InterceptError(f"GBA ROM image of {len(img)} bytes: rom_banked supports up to 4 MiB")
+    path = os.path.join(tempfile.gettempdir(), f"gba2gb_rom_{hashlib.sha1(img).hexdigest()[:16]}.bin")
+    if not os.path.exists(path):
+        with open(path + ".tmp", "wb") as fh:
+            fh.write(img)
+        os.replace(path + ".tmp", path)
+    L = []
+    for k in range(0, len(img), 0x4000):
+        n = min(0x4000, len(img) - k)
+        L += [f'SECTION "gba_rom_{k >> 14}", ROMX[$4000], BANK[{ROMB_FIRST + (k >> 14)}]',
+              f'    INCBIN "{path}", {k}, {n}']
+    return L
