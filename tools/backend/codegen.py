@@ -253,6 +253,10 @@ class Gen:
         if op == "b":
             self.e(f"jp {self.tgt(x.target)}")
             return
+        if op == "bl" and x.native and x.native.startswith("icall_"):
+            self.ldimm(R(14), (x.addr + 4) | 1)
+            self.e(f"call NAT_{x.native}")      # indirect call (tools/lift/icall.py)
+            return
         if op == "bl" and x.native:
             self.e(f"call NAT_{x.native}")      # Phase 5 B2: native helper (runtime/gb_softfloat.asm)
             return

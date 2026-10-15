@@ -183,6 +183,8 @@ class NarrowGen(Gen):
         if op == "bl":
             for r in (0, 1, 2, 3):
                 self.ensure(x, r, 4)
+            if isinstance(x.a, str):          # indirect call target register
+                self.ensure(x, int(x.a[1:]), 4)
             super().ins(x)
             self.valid = {}
             return

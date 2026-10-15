@@ -183,6 +183,8 @@ def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole
     asm += divc_asm(getattr(prog, "divc", set()))
     from tools.lift.memo import asm as memo_asm
     asm += memo_asm(getattr(prog, "memo_used", {}))
+    from tools.lift.icall import asm as icall_asm
+    asm += icall_asm(prog)
     from tools.lift.decimate import asm as decim_asm
     from tools.lift import lift as _lft
     asm += decim_asm(getattr(prog, "decim", []), _lft.DECIMATE["n"])

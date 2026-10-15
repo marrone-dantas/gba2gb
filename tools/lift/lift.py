@@ -50,8 +50,11 @@ class Ins:
 
 
 class Image:
-    def __init__(self, data: bytes, base: int, entries: dict[str, int]):
+    def __init__(self, data: bytes, base: int, entries: dict[str, int], taken=None):
         self.data, self.base, self.entries = data, base, entries
+        # Thumb functions whose address is stored as data (vtables, function pointers):
+        # possible targets of indirect calls (Program._decode, tools/lift/icall.py)
+        self.taken = set(taken or ())
 
     @classmethod
     def from_elf(cls, path):
@@ -59,11 +62,20 @@ class Image:
             elf = ELFFile(fh)
             text = elf.get_section_by_name(".text")
             data, base = text.data(), text["sh_addr"]
-            entries = {}
+            entries, thumb = {}, set()
             for s in elf.get_section_by_name(".symtab").iter_symbols():
                 if s["st_info"]["type"] == "STT_FUNC" and s["st_shndx"] != "SHN_UNDEF":
                     entries[s.name] = s["st_value"] & ~1
-        return cls(data, base, entries)
+                    if s["st_value"] & 1 and base <= s["st_value"] < base + len(data):
+                        thumb.add(s["st_value"])
+            taken = set()
+            for sec in elf.iter_sections():
+                if sec["sh_type"] == "SHT_PROGBITS" and sec["sh_flags"] & 2 and thumb:
+                    d = sec.data()
+                    for (w,) in struct.iter_unpack("<I", d[:len(d) & ~3]):
+                        if w in thumb:
+                            taken.add(w & ~1)
+        return cls(data, base, entries, taken)
 
     @classmethod
     def from_bin(cls, path, base=0x08000000, entry=0x08000000):
@@ -204,6 +216,9 @@ CLONE = {"enabled": False, "default": False, "max_ins": 160, "per_func": 4, "tot
 CLONE_DELTA = 0x08000000
 # Step 10 render decimation (tools/lift/decimate.py): render every n-th frame.
 DECIMATE = {"n": 1, "render": set()}
+# Indirect calls (tools/lift/icall.py): `bl` to a `bx rN` stub becomes `call NAT_icall_rN`,
+# a run-time dispatch over the functions whose address is taken (Image.taken).
+ICALL = {"enabled": True}
 
 
 def _override(name):
@@ -245,6 +260,7 @@ class Program:
         import os
         self.idioms = natives and os.environ.get("GBA2GB_IDIOMS", "1") not in ("0", "")
         self.funcs = {self.entry}
+        self.icalls = set()
         self.cfg = nx.DiGraph()
         self._decode()
         self.clones = {}
@@ -271,14 +287,43 @@ class Program:
             raise LiftError(f"failed to decode at {addr:#x}")
         return convert(self.md, self.img, i)
 
+    def _call_via(self, t):
+        """Register of a `bx rN` call-via stub at t (Thumb-1 indirect call: `bl stub`
+        with `stub: bx rN`), else None."""
+        o = t - self.img.base
+        if not 0 <= o < len(self.img.data) - 1:
+            return None
+        hw = struct.unpack_from("<H", self.img.data, o)[0]
+        if hw & 0xFF87 == 0x4700:          # bx rm
+            r = (hw >> 3) & 15
+            if r not in (14, 15):
+                return r
+        return None
+
     def _decode(self):
         work = [self.entry]
-        while work:
+        roots = False
+        while work or (self.icalls and not roots):
+            if not work:
+                # indirect calls found: every function whose address is taken is a root
+                roots = True
+                for t in sorted(self.img.taken):
+                    if t not in self.natives and t not in self.ins:
+                        self.funcs.add(t)
+                        work.append(t)
+                continue
             a = work.pop()
             while a not in self.ins:
                 x = self._decode_one(a)
                 self.ins[a] = x
-                if x.op == "bl" and x.target not in self.natives and self.idioms:
+                if x.op == "bl" and ICALL["enabled"] and x.target not in self.natives:
+                    r = self._call_via(x.target)
+                    if r is not None:            # indirect call through rN
+                        x.native, x.a, x.target = f"icall_r{r}", f"r{r}", None
+                        self.icalls.add(r)
+                if x.op == "bl" and x.native:
+                    pass
+                elif x.op == "bl" and x.target not in self.natives and self.idioms:
                     from tools.lift import idioms
                     o = x.target - self.img.base
                     if 0 <= o < len(self.img.data):
@@ -286,7 +331,9 @@ class Program:
                                           lambda a, n: self.img.data[a - self.img.base:a - self.img.base + n])
                         if nm:
                             self.natives[x.target] = nm
-                if x.op == "bl" and x.target in self.natives:
+                if x.op == "bl" and x.target is None:
+                    pass
+                elif x.op == "bl" and x.target in self.natives:
                     x.native = self.natives[x.target]
                 elif x.op == "bl":
                     self.funcs.add(x.target)
