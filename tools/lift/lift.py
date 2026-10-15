@@ -194,6 +194,9 @@ NATIVES = {"__aeabi_dadd": "dadd", "__aeabi_dsub": "dsub", "__aeabi_dmul": "dmul
 # function (plain C name or its Itanium-mangled C++ name `_Z<len><name>...`) becomes
 # `call NAT_<native>` (runtime/ports/*.asm). Set by gba2gbc_core.build(port=...).
 EXTRA_NATIVES: dict[str, str] = {}
+# Memoized map-pure functions {name: (id, param sizes)} (tools/lift/memo.py); set by
+# gba2gbc_core.build for ports.
+MEMO: dict[str, tuple] = {}
 
 
 def _override(name):
@@ -239,6 +242,9 @@ class Program:
         self._decode()
         self._build_cfg()
         self.divc = set()
+        self.memo_used = {}
+        if natives and MEMO:
+            self._memo()
         if natives and os.environ.get("GBA2GB_DIVC", "1") not in ("0", ""):
             self._const_div()
 
@@ -300,6 +306,15 @@ class Program:
             if x.op not in ("b", "ret", "pop_ret") and nxt in self.ins:
                 if nxt in leaders:
                     self.cfg.add_edge(cur, nxt)
+
+    def _memo(self):
+        """Calls to map-pure functions go through the memo cache (tools/lift/memo.py)."""
+        addr = {a & ~1: n for n, a in self.img.entries.items() if n in MEMO}
+        for x in self.ins.values():
+            if x.op == "bl" and x.native is None and x.target in addr:
+                fid, ps = MEMO[addr[x.target]]
+                x.native = f"memo_{fid}"
+                self.memo_used[fid] = (f"L_{x.target:08X}", ps)
 
     def _const_div(self):
         """Step 7: a division helper call whose divisor r1 is a block-local constant

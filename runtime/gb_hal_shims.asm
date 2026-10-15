@@ -171,7 +171,9 @@ wRcT: ds 1
 wRcOff: ds 2
 wRcK: ds 1
 
-wVsLast:: ds 1                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
+wVsLast:: ds 1
+wMemoOk:: ds 1                ; memo cache valid (tools/lift/memo.py); 0 after a VRAM store
+wMemoKey:: ds 8                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
 
 SECTION "obj_state", WRAMX[$D800]
 ; Phase P1: one byte per GBA object: bit 0 live (ever stored), bit 1 dirty (changed
@@ -1604,6 +1606,8 @@ HAL_VRAM_STORE32::
 ; Everything else is ignored. 4bpp -> 2bpp: colour index -> GB colour through the
 ; palette level tables (luminance, 4 levels), so palettes must be loaded first.
 HAL_VRAM_STORE16::
+    xor a
+    ld [wMemoOk], a               ; VRAM changed: memoized map queries are stale
     ldh a, [c]
     ld [wVtmp], a
     inc c

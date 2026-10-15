@@ -57,6 +57,12 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         if port and k in port:
             _ic.CONFIG[k] = port[k]
     _lift.EXTRA_NATIVES.update((port or {}).get("overrides", {}))
+    saved_memo = dict(_lift.MEMO)
+    _lift.MEMO.clear()
+    if port and port.get("memo", True) and port.get("overrides") is not None:
+        from tools.lift.memo import find as memo_find
+        _lift.MEMO.update({n: (i + 1, ps) for i, (n, ps) in enumerate(sorted(memo_find(src, entry).items()))
+                           if n not in _lift.EXTRA_NATIVES})
     try:
         prog = _build(src, out, entry, asm_out, prune, profile, opts, True, affine, peephole, port)
         prog.audio_stubs = {} if audio else found
@@ -73,6 +79,8 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         _ic.CONFIG.update(saved[0])
         _lift.EXTRA_NATIVES.clear()
         _lift.EXTRA_NATIVES.update(saved[1])
+        _lift.MEMO.clear()
+        _lift.MEMO.update(saved_memo)
 
 
 def _cosmetic(src, out, port):
@@ -163,6 +171,8 @@ def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole
         prog.hal_info = info
     from tools.backend.divconst import asm as divc_asm
     asm += divc_asm(getattr(prog, "divc", set()))
+    from tools.lift.memo import asm as memo_asm
+    asm += memo_asm(getattr(prog, "memo_used", {}))
     with tempfile.TemporaryDirectory() as td:
         k = asm_out or os.path.join(td, "kernel.asm")
         open(k, "w").write(asm)

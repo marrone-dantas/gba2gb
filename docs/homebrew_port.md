@@ -79,3 +79,12 @@ float-heavy or per-object loops dominate frame time.
   a dedicated effect BG layer is already omitted.
 * Already in the HAL: dirty-tracked OAM compose (Phase P1, per-object dirty bits)
   and hardware X/Y flip (GBA flip bits -> GB OAM attributes, also in port natives).
+
+## Memoization of map-pure functions
+
+`tools/lift/memo.py` finds functions with only small integer parameters whose loads
+read ROM, GBA VRAM or their own stack frame and that store only to their frame
+(typical `tile_at` / `flag_at` queries). Their call sites go through `NAT_memo_<id>`,
+a 64-entry direct-mapped cache at $C100 keyed by function id and argument bytes.
+Any VRAM store (`HAL_VRAM_STORE16`) invalidates the cache. Disable with
+`"memo": false` in the port manifest.
