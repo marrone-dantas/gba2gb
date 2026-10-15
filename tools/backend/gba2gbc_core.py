@@ -161,6 +161,8 @@ def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole
     if hal:
         asm += lower.hal_sections(src, prog, info, affine)
         prog.hal_info = info
+    from tools.backend.divconst import asm as divc_asm
+    asm += divc_asm(getattr(prog, "divc", set()))
     with tempfile.TemporaryDirectory() as td:
         k = asm_out or os.path.join(td, "kernel.asm")
         open(k, "w").write(asm)

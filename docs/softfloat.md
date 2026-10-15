@@ -63,3 +63,13 @@ Limits:
 - The clock drifts while a DirectSound stream (which reprograms TIMA) plays.
 
 Covered by `tests/test_timer.py` (`tests/demos/timer_demo.c`).
+
+## Division by constant (ROM tables)
+
+tools/lift/lift.py `_const_div` rewrites a call to `__aeabi_{u,}idiv{,mod}` whose
+divisor r1 is a block-local constant d (2..960, not a power of two; `movs r1, #imm`
+optionally followed by `lsls r1, r1, #k`) into `call NAT_divc_<kind>_<d>`.
+tools/backend/divconst.py emits, per divisor, one ROMX bank with Q[i] = i // d
+(i < 16 d) and M[q] = q * d, and base-16 long division (8 table steps, leading zero
+bytes skipped; signed kinds work on |x|). `GBA2GB_DIVC=0` disables it. Constant
+multiplications were already shift-and-add (tools/backend/narrow.py `mul_const`).

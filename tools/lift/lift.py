@@ -238,6 +238,9 @@ class Program:
         self.cfg = nx.DiGraph()
         self._decode()
         self._build_cfg()
+        self.divc = set()
+        if natives and os.environ.get("GBA2GB_DIVC", "1") not in ("0", ""):
+            self._const_div()
 
     def _decode_one(self, addr):
         o = addr - self.img.base
@@ -297,6 +300,27 @@ class Program:
             if x.op not in ("b", "ret", "pop_ret") and nxt in self.ins:
                 if nxt in leaders:
                     self.cfg.add_edge(cur, nxt)
+
+    def _const_div(self):
+        """Step 7: a division helper call whose divisor r1 is a block-local constant
+        becomes `call NAT_divc_<kind>_<d>` (ROM-table long division,
+        tools/backend/divconst.py)."""
+        from tools.backend.divconst import KINDS, eligible
+        for n in self.cfg.nodes:
+            r1 = None
+            for x in self.cfg.nodes[n]["ins"]:
+                if x.op == "bl":
+                    if x.native in KINDS and eligible(r1):
+                        x.native = f"divc_{x.native}_{r1}"
+                        self.divc.add((x.native.split("_")[1], r1))
+                    r1 = None
+                elif x.op == "mov" and x.rd == 1 and isinstance(x.a, int) and x.b is None:
+                    r1 = x.a
+                elif x.op == "lsl" and x.rd == 1 and x.a == "r1" and isinstance(x.b, int) and r1 is not None:
+                    r1 = (r1 << x.b) & 0xFFFFFFFF
+                elif (x.rd == 1 and not x.op.startswith(("str", "cmp", "tst", "cmn", "b"))) or \
+                        (1 in (x.regs or []) and x.op not in ("push", "stm")):
+                    r1 = None
 
     def ordered(self):
         return [self.ins[a] for a in sorted(self.ins)]
