@@ -469,6 +469,22 @@ ENDC
     ld h, HIGH(VCOUNT_LUT)
     ld a, [hl]
     ld b, a
+    ; reads that follow each other closely (step < 8 lines) advance by one line, so
+    ; every GBA line value is seen and polls for an exact VCOUNT such as
+    ; `while (VCOUNT != 160)` terminate; larger steps and a new frame are taken as is
+    ld a, [wLastVc]
+    cp b
+    jr nc, .vok
+    ld e, a
+    ld a, b
+    sub e
+    cp 8                          ; only while polling (small steps of the LUT)
+    jr nc, .vok
+    ld a, e
+    inc a
+    ld b, a
+.vok:
+    ld a, b
     cp 160
     jr c, .store
     ld a, [wLastVc]

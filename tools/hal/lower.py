@@ -75,7 +75,7 @@ def hal_sections(elf_path, prog, info, affine=None):
     img = prog.img.data
     rom_sram = CONFIG["rom_sram"]
     rom_banked = CONFIG.get("rom_banked")
-    if prog.img.base != 0x08000000 or (len(img) > ARM_IMAGE_MAX and not rom_sram and not rom_banked):
+    if not rom_banked and (prog.img.base != 0x08000000 or (len(img) > ARM_IMAGE_MAX and not rom_sram)):
         raise InterceptError(f"ARM image of {len(img)} bytes does not fit the 8 KiB ROM0 window")
     if rom_sram:
         lim = (ew[0] - 0x02000000) if ew[1] else 0x10000
