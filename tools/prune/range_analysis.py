@@ -89,11 +89,21 @@ def join(a, b):
     return (min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3]))
 
 
+# Widening thresholds: a growing bound jumps to the next 8/16-bit boundary before
+# giving up to the 32-bit bound, so loop counters bounded by a byte- or
+# halfword-sized value (not only a constant) keep a narrow range.
+U_STEPS = (0xFF, 0x100, 0xFFFF, 0x10000)
+S_HI = (0x7F, 0x80, 0xFF, 0x100, 0x7FFF, 0x8000, 0xFFFF, 0x10000)
+S_LO = (-0x80, -0x81, -0x100, -0x101, -0x8000, -0x8001, -0x10000, -0x10001)
+
+
 def widen(old, new):
     if old is None:
         return new
-    return norm((0 if new[0] < old[0] else old[0], M32 if new[1] > old[1] else old[1],
-                 SMIN if new[2] < old[2] else old[2], SMAX if new[3] > old[3] else old[3]))
+    up = lambda n, o, steps, top: o if n <= o else next((t for t in steps if t >= n), top)
+    dn = lambda n, o, steps, bot: o if n >= o else next((t for t in steps if t <= n), bot)
+    return norm((0 if new[0] < old[0] else old[0], up(new[1], old[1], U_STEPS, M32),
+                 dn(new[2], old[2], S_LO, SMIN), up(new[3], old[3], S_HI, SMAX)))
 
 
 def bitlen_mask(x):
@@ -186,6 +196,8 @@ def bucket(cls):
     return {"u8": "8", "i8": "8", "u16": "16", "i16": "16", "i32": "32"}.get(cls)
 
 
+SWAP = {"eq": "eq", "ne": "ne", "cs": "ls", "ls": "cs", "hi": "cc", "cc": "hi",
+        "ge": "le", "le": "ge", "gt": "lt", "lt": "gt"}
 NEG = {"eq": "ne", "ne": "eq", "cs": "cc", "cc": "cs", "hi": "ls", "ls": "hi",
        "ge": "lt", "lt": "ge", "gt": "le", "le": "gt", "mi": "pl", "pl": "mi",
        "vs": "vc", "vc": "vs"}
@@ -322,9 +334,10 @@ class SSAFunction:
         rename(entry)
 
     def _pi(self, r, cond, cmp_x, block, stacks):
-        """pi value: stacks[r] restricted by `cmp r, y` + condition."""
+        """pi value: stacks[r] restricted by `cmp r, y` + condition (or, for the
+        second operand, `cmp y, r` with the swapped condition)."""
         src = stacks[r][-1]
-        b = cmp_x.b
+        b = cmp_x.b if r == int(cmp_x.a[1:]) else cmp_x.a
         b = stacks[int(b[1:])][-1] if isinstance(b, str) else b
         return self._new(reg=r, kind="pi", block=block, cond=cond, env={"x": src, "b": b})
 
@@ -354,7 +367,63 @@ class SSAFunction:
                     continue
                 cond = br.cond if succ == br.target else NEG[br.cond]
                 out.setdefault((p, succ), []).append((ra, cond, cmp_x))
+                if isinstance(cmp_x.b, str) and int(cmp_x.b[1:]) != ra and cond in SWAP:
+                    out[(p, succ)].append((int(cmp_x.b[1:]), SWAP[cond], cmp_x))
         return out
+
+
+BUILTIN_RANGE = {"h": urange(0, 0xFF), "a": srange(-128, 127), "c": srange(-128, 127),
+                 "t": urange(0, 0xFFFF), "s": srange(-32768, 32767), "b": urange(0, 1)}
+
+
+def mangled_arg_types(name):
+    """Per-argument type codes of an Itanium-mangled free function (`_Z<n><name><args>`):
+    a builtin letter, or None for anything else (classes, pointers, substitutions)."""
+    import re
+    m = re.fullmatch(r"_ZL?(\d+)(\w+)", name or "")
+    if not m:
+        return None
+    rest, out, i = m.group(2)[int(m.group(1)):], [], 0
+    if rest == "v":
+        return []
+    while i < len(rest):
+        c = rest[i]
+        if c.isdigit():
+            j = i
+            while rest[j].isdigit():
+                j += 1
+            i = j + int(rest[i:j])
+            out.append(None)
+        elif c == "S":
+            j = rest.find("_", i)
+            if j < 0:
+                return None
+            i = j + 1
+            out.append(None)
+        elif c in "PRK":
+            # pointer/reference/const qualifier: the next type is consumed as part of it
+            i += 1
+            while i < len(rest) and rest[i] in "PRK":
+                i += 1
+            if i < len(rest) and rest[i].isdigit():
+                j = i
+                while rest[j].isdigit():
+                    j += 1
+                i = j + int(rest[i:j])
+            elif i < len(rest) and rest[i] == "S":
+                i = rest.find("_", i) + 1
+            else:
+                i += 1
+            out.append(None)
+        elif c in "hacstbijlmxyfdwv":
+            out.append(c)
+            i += 1
+        else:
+            return None
+    return out
+
+
+SLOT_FORWARD = True  # spill-slot range forwarding (SSAProgram._link_slots)
 
 
 class SSAProgram:
@@ -369,6 +438,8 @@ class SSAProgram:
         self.func_of = {v: fa for fa, f in self.funcs.items() for v in f.values}
         self.defval = {(v.ins.addr, v.reg): v for v in self.values if v.kind == "ins"}
         self._link_calls()
+        if SLOT_FORWARD:
+            self._link_slots()
 
     def _link_calls(self):
         """Interprocedural links for direct BL calls (B0): callee parameters r0-r3
@@ -382,11 +453,83 @@ class SSAProgram:
                 ret = self.defval.get((x.addr, 0))
                 if ret is not None and x.target in self.funcs:
                     ret.links = list(self.funcs[x.target].ret_vals)
+        names = {a & ~1: n for n, a in getattr(self.prog.img, "entries", {}).items()}
         for fa, f in self.funcs.items():
+            # AAPCS: the caller zero/sign-extends narrow integer arguments
+            for r, t in enumerate((mangled_arg_types(names.get(fa)) or [])[:4]):
+                if t in BUILTIN_RANGE:
+                    f.params[r].typed = BUILTIN_RANGE[t]
             if fa == self.prog.entry or fa not in sites:
                 continue
             for r in range(4):
                 f.params[r].links = [env[r] for env in sites[fa] if r in env]
+
+    def _link_slots(self):
+        """Spill-slot forwarding: a word `ldr` from a fixed offset of a function's own
+        frame gets the join of the values stored there by word `str`s of the same
+        function. Only for frames whose address does not escape (SP-derived pointers
+        are used only as load/store bases or for further constant offsets), slots below
+        the entry SP (the caller's area holds incoming stack arguments) that no push,
+        narrow store or callee stack argument overlaps."""
+        from tools.prune.frame import sp_offsets
+        from tools.lift.memo import params as mangled_params
+        off = sp_offsets(self)
+        names = {a & ~1: n for n, a in getattr(self.prog.img, "entries", {}).items()}
+        for f in self.funcs.values():
+            stores, loads, bad, escaped = {}, {}, set(), False
+            for addr, env in f.envs.items():
+                x = self.prog.ins[addr]
+                sp = env.get(13)
+                derived = {r for r, v in env.items() if v in off}
+                if x.op == "push":
+                    if sp in off:
+                        bad.update(range(off[sp] - 4 * len(x.regs), off[sp]))
+                    if derived - {13}:
+                        escaped = True
+                    continue
+                if x.op in ("pop", "pop_ret", "ret"):
+                    continue
+                if x.op == "bl":
+                    ps = mangled_params(names.get(x.target, "")) if x.target is not None else None
+                    n = 32 if ps is None else 4 * max(0, len(ps) - 4)
+                    if sp in off:
+                        bad.update(range(off[sp], off[sp] + n))
+                    if derived & {0, 1, 2, 3}:
+                        escaped = True
+                    continue
+                if x.mem:
+                    base = env.get(x.mem[0])
+                    if x.op.startswith("str") and x.rd in derived:
+                        escaped = True
+                    if base not in off:
+                        continue
+                    if x.mem[1] is not None:
+                        escaped = True  # dynamic index into the frame
+                        continue
+                    o = off[base] + (x.mem[2] or 0)
+                    if x.op == "str":
+                        stores.setdefault(o, []).append(env.get(x.rd))
+                    elif x.op.startswith("str"):
+                        bad.update(range(o, o + 4))
+                    elif x.op == "ldr":
+                        loads.setdefault(o, []).append(addr)
+                    continue
+                if x.op in ("add", "sub", "mov") and x.rd is not None:
+                    v = self.defval.get((addr, x.rd))
+                    if v in off or not derived:
+                        continue
+                if derived and x.op not in ("cmp", "cmn", "tst"):
+                    escaped = True
+            if escaped:
+                continue
+            for o, addrs in loads.items():
+                if o not in stores or o + 4 > 0 or bad & set(range(o, o + 4)) or None in stores[o] \
+                        or any(p != o and abs(p - o) < 4 for p in stores):
+                    continue
+                for addr in addrs:
+                    lv = self.defval.get((addr, self.prog.ins[addr].rd))
+                    if lv is not None and lv.links is None:
+                        lv.links = list(stores[o])
 
     def by_key(self):
         return {v.key: v for v in self.values if v.key}
@@ -401,6 +544,12 @@ def operand(v: Value, x):
 
 
 def transfer(v: Value):
+    r = _transfer(v)
+    t = getattr(v, "typed", None)
+    return r if t is None or r is None else meet(r, t)
+
+
+def _transfer(v: Value):
     if v.links is not None:
         r = None
         for a in v.links:
@@ -528,7 +677,8 @@ def analyze(ssa: SSAProgram, assume: dict | None = None):
         count[v] += 1
         if count[v] > GIVE_UP:
             new = TOP
-        elif count[v] > WIDEN_AFTER:
+        elif count[v] > WIDEN_AFTER and v.kind == "phi":
+            # every cycle goes through a phi: widening there suffices
             new = widen(old, join(old, new))
         else:
             new = join(old, new) if v.kind == "phi" else new

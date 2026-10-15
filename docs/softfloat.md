@@ -73,3 +73,14 @@ tools/backend/divconst.py emits, per divisor, one ROMX bank with Q[i] = i // d
 (i < 16 d) and M[q] = q * d, and base-16 long division (8 table steps, leading zero
 bytes skipped; signed kinds work on |x|). `GBA2GB_DIVC=0` disables it. Constant
 multiplications were already shift-and-add (tools/backend/narrow.py `mul_const`).
+
+## Range inference improvements (step 8)
+
+`tools/prune/range_analysis.py`:
+* branch refinement narrows both `cmp` operands (the second one gets the swapped
+  condition), so `i <= n` bounds `i` by the range of `n`;
+* widening jumps to 8/16-bit thresholds before the 32-bit limits, and only at phis;
+* spill-slot forwarding: a word reload from a non-escaping frame slot gets the join
+  of the values stored there (`SLOT_FORWARD`);
+* integer parameters of Itanium-mangled functions get their type range (AAPCS
+  callers extend narrow arguments).

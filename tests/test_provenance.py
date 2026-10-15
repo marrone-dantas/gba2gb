@@ -40,7 +40,16 @@ def syms(name):
     return out, lut
 
 
-def test_spilled_rom_pointer_classified_rom():
+def test_spilled_rom_pointer_forwarded():
+    """With spill-slot forwarding the reloaded &sin_lut has a proven ROM range."""
+    p, s = ssa_of("spill_demo")
+    acc, _ = analyze(s, strict=False)
+    regions = sorted(acc[a]["region"] for a, x in p.ins.items() if x.op == "ldrsh" and a in acc)
+    assert regions == ["dyn", "rom", "rom"]
+
+
+def test_spilled_rom_pointer_classified_rom(monkeypatch):
+    monkeypatch.setattr(ra, "SLOT_FORWARD", False)  # exercise provenance on its own
     p, s = ssa_of("spill_demo")
     acc, _ = analyze(s, strict=False)
     ind = pointer_induction(s)

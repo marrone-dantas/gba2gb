@@ -60,7 +60,16 @@ def test_widen_and_join():
     j = ra.join(ra.const(0), ra.const(5))
     assert j[:2] == (0, 5)
     w = ra.widen(j, ra.join(j, ra.const(6)))
-    assert w[0] == 0 and w[1] >= ra.SMAX and w[3] == ra.SMAX  # upper bounds jump to the limits
+    assert w[0] == 0 and w[1] == 0x7F and w[3] == 0x7F  # upper bounds jump to the next threshold
+    w = ra.widen(w, ra.join(w, ra.const(0x20000)))
+    assert w[1] == ra.M32 and w[3] == ra.SMAX           # past 16 bits: the 32-bit limits
+
+
+def test_spill_slot_and_swapped_cmp_bound():
+    """A loop counter compared against a spilled, byte-bounded value stays narrow."""
+    assert ra.mangled_arg_types("_Z12tile_flag_athhhhh") == ["h"] * 5
+    assert ra.mangled_arg_types("_Z8is_solidP6Objectaa") == [None, "a", "a"]
+    assert ra.mangled_arg_types("_Z9draw_hair5fix16S_a") == [None, None, "a"]
 
 
 def test_constraints():
