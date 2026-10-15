@@ -61,3 +61,21 @@ extra BG layers are not shown, palettes are approximate, no audio (audio
 subsystem removed by default, docs/audio.md "Audio off"). Lifted
 Thumb code is roughly 10-30x slower per instruction than the original CPU, so
 float-heavy or per-object loops dominate frame time.
+
+## Cosmetic loops, array caps, OAM ranges
+
+* `cosmetic` (manifest; ports default `{"cap": 0}`): tools/lift/cosmetic.py finds
+  loops that walk one global array with a pointer stride, store only through that
+  pointer (or the stack), call only drawing natives (`draw_calls`, e.g. `spr`),
+  arithmetic helpers or an RNG-like helper, read no I/O register and leave no live
+  register at their exit. Cap 0 patches the loop header into a branch to the exit
+  (the body is not lifted); `{"cap": K}` or `{"caps": {array: K}}` keeps K elements.
+* `array_caps` ({array: K or (K, elem)}): tools/lift/array_cap.py lowers loop bounds
+  over any global array: end-pointer literals that are only compared, `movs/adds`
+  end computations, and `cmp rN, #count`. Each patch is reported in `prog.cosmetic`.
+* `oam_drop` ((lo, hi)): constant-address OAM stores to GBA objects lo..hi-1 are
+  dropped (never-stored objects are not composed), for games that keep effects in a
+  dedicated OAM slot range. Only the BG layer chosen by `display_bg` is composed, so
+  a dedicated effect BG layer is already omitted.
+* Already in the HAL: dirty-tracked OAM compose (Phase P1, per-object dirty bits)
+  and hardware X/Y flip (GBA flip bits -> GB OAM attributes, also in port natives).

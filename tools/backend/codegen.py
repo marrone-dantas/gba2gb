@@ -365,6 +365,10 @@ class Gen:
             o = acc["const"] - 0x07000000
             if o + n > 1024:
                 raise LiftError(f"OAM access {acc['const']:#x} at {x.addr:#x}: outside OAM")
+            drop = CONFIG.get("oam_drop")
+            if st and drop and drop[0] <= o // 8 < drop[1]:
+                self.e(f"; OAM store to object {o // 8} dropped (oam_drop)")
+                return
             if st:
                 for i in range(n):
                     self.e(f"ldh a, [{h(rd + i)}]", f"ld [${OAM_MIRROR + o + i:04X}], a")

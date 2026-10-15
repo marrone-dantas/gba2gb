@@ -39,6 +39,9 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         port = dict(port or {})
         port["defines"] = list(port.get("defines", [])) + (["LATE_VSYNC"] if late_vsync else []) + \
             (["SNAPSHOT"] if snapshot else [])
+    cos_rep = None
+    if hal and port and (port.get("cosmetic") is not None or port.get("array_caps")):
+        src, cos_rep = _cosmetic(src, out, port)
     if not hal:
         return _build(src, out, entry, asm_out, prune, profile, opts, False, affine, peephole, None)
     from tools.lift import lift as _lift
@@ -50,13 +53,14 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         from tools.audio.strip import detect
         found = detect(src, entry)
         _lift.EXTRA_NATIVES.update({n: "audio_nop" for n in found})
-    for k in ("rom_sram", "vram_shadow", "display_bg", "port_init"):
+    for k in ("rom_sram", "vram_shadow", "display_bg", "port_init", "oam_drop"):
         if port and k in port:
             _ic.CONFIG[k] = port[k]
     _lift.EXTRA_NATIVES.update((port or {}).get("overrides", {}))
     try:
         prog = _build(src, out, entry, asm_out, prune, profile, opts, True, affine, peephole, port)
         prog.audio_stubs = {} if audio else found
+        prog.cosmetic = cos_rep
         if snapshot:
             from tools.hal.snapshot import capture_and_patch
             try:
@@ -69,6 +73,40 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         _ic.CONFIG.update(saved[0])
         _lift.EXTRA_NATIVES.clear()
         _lift.EXTRA_NATIVES.update(saved[1])
+
+
+def _cosmetic(src, out, port):
+    """Port manifest keys (docs/homebrew_port.md, "Cosmetic loops"):
+    cosmetic: {"cap": K, "caps": {array: K}} - detected cosmetic loops keep K elements
+    (0 = removed); array_caps: {array: K} - explicit caps for any global array."""
+    from tools.lift import cosmetic, array_cap
+    cfg = port.get("cosmetic") or {}
+    patched = os.path.splitext(out)[0] + ".patched.elf"
+    rep = {"loops": [], "caps": []}
+    caps = dict(port.get("array_caps") or {})
+    if port.get("cosmetic") is not None:
+        found = cosmetic.find(src, set(port.get("draw_calls", port.get("overrides", {}))))
+        rm = []
+        for lp in found:
+            k = cfg.get("caps", {}).get(lp["array"], cfg.get("cap", 0))
+            lp["cap"] = k
+            rep["loops"].append(lp)
+            if k == 0:
+                rm.append(lp)
+            elif k < lp["count"]:
+                caps.setdefault(lp["array"], (k, lp["elem"]))
+        cur = src
+        if rm:
+            cosmetic.remove(cur, patched, rm)
+            cur = patched
+    else:
+        cur = src
+    if caps:
+        tmp = patched + ".tmp"
+        rep["caps"] = array_cap.cap_elf(cur, tmp, caps)
+        os.replace(tmp, patched)
+        cur = patched
+    return cur, rep
 
 
 def _build(src, out, entry, asm_out, prune, profile, opts, hal, affine, peephole, port):

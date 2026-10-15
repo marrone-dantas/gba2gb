@@ -103,20 +103,21 @@ def write_inc(b, path):
     open(path, "w").write("\n".join(L) + "\n")
 
 
-def port_config(inc_dir, display_bg=1, profile=False):
+def port_config(inc_dir, display_bg=1, profile=False, cosmetic={"cap": 0}):
     return {"overrides": dict(OVERRIDES), "asm": [PORT_ASM], "inc": inc_dir,
             "defines": ["PORT_OAM", "PORT_BGMAP", "ROM_SRAM", "VRAM_SHADOW"] + (["PROFILE"] if profile else []),
-            "rom_sram": True, "vram_shadow": True, "display_bg": display_bg, "port_init": True}
+            "rom_sram": True, "vram_shadow": True, "display_bg": display_bg, "port_init": True,
+            "draw_calls": ["spr"], "cosmetic": dict(cosmetic) if cosmetic is not None else None}
 
 
-def build_port(elf, out, prune="sound", display_bg=1, profile=False, hotspots=None, **kw):
+def build_port(elf, out, prune="sound", display_bg=1, profile=False, hotspots=None, cosmetic={"cap": 0}, **kw):
     """hotspots: {"plan": [...], "frames": N, "from": F} - with profile=True, write the
     hotspot report (tools/ports/hotspots.py) next to the ROM after the build."""
     from tools.backend.gba2gbc_core import build
     bdir = os.path.dirname(os.path.abspath(out))
     b = bake(elf)
     write_inc(b, os.path.join(bdir, "p8_tiles.inc"))
-    prog = build(elf, out, entry="main", hal=True, prune=prune, port=port_config(bdir, display_bg, profile), **kw)
+    prog = build(elf, out, entry="main", hal=True, prune=prune, port=port_config(bdir, display_bg, profile, cosmetic), **kw)
     if profile and hotspots is not None:
         from tools.ports.hotspots import report
         prog.hotspots = report(out, elf, hotspots.get("plan", []), hotspots.get("frames", 3000),
