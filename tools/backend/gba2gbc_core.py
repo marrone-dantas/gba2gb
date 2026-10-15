@@ -20,7 +20,7 @@ def run(cmd):
 
 
 def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None, hal=False, affine=None,
-          peephole=None, port=None, audio=None):
+          peephole=None, port=None, audio=None, late_vsync=None, snapshot=None):
     """port: homebrew port description (docs/homebrew_port.md), a dict with
     overrides {function: native}, asm [port runtime files], defines [rgbasm -D for the
     HAL], rom_sram, vram_shadow, display_bg, port_init. Implies hal=True.
@@ -31,6 +31,14 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         hal = True
     if audio is None:
         audio = os.environ.get("GBA2GB_AUDIO", "0") not in ("0", "")
+    if late_vsync is None:
+        late_vsync = bool(port)
+    if snapshot is None:
+        snapshot = bool(port) and os.environ.get("GBA2GB_SNAPSHOT", "1") not in ("0", "")
+    if hal and (late_vsync or snapshot):
+        port = dict(port or {})
+        port["defines"] = list(port.get("defines", [])) + (["LATE_VSYNC"] if late_vsync else []) + \
+            (["SNAPSHOT"] if snapshot else [])
     if not hal:
         return _build(src, out, entry, asm_out, prune, profile, opts, False, affine, peephole, None)
     from tools.lift import lift as _lift
@@ -49,6 +57,12 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
     try:
         prog = _build(src, out, entry, asm_out, prune, profile, opts, True, affine, peephole, port)
         prog.audio_stubs = {} if audio else found
+        if snapshot:
+            from tools.hal.snapshot import capture_and_patch
+            try:
+                prog.snapshot = capture_and_patch(out, force=snapshot == "force")
+            except RuntimeError as e:      # no VBlankIntrWait during init: normal boot
+                prog.snapshot = {"skipped": str(e)}
         return prog
     finally:
         _ic.CONFIG.clear()

@@ -59,3 +59,22 @@ at most 40 kept (OAM order = priority).
   with simulated VCOUNT/KEYINPUT and a minimal renderer (no X wrap, all 128 objects).
 
 EWRAM (0x02000000) is mapped to MBC5 SRAM since Phase 5 A2 (docs/sram_paging.md).
+
+## Idle time and boot snapshot
+
+* `LATE_VSYNC` (`build(late_vsync=...)`, default on for ports): BIOS
+  VBlankIntrWait halts until the next VBlank only if no VBlank happened since its
+  previous return. A lifted frame that already took longer than 1/60 s does not
+  wait again (the GBA would not have been late), removing ~half a VBlank of idle
+  time per wait. The VBlank ISR keeps doing OAM DMA / scroll latches; port double
+  buffers are unaffected (a page handed over before the next VBlank is just
+  replaced by the newer one). The wait itself always used `halt`.
+* `SNAPSHOT` (`build(snapshot=...)`, default on for ports, `GBA2GB_SNAPSHOT=0`
+  off): tools/hal/snapshot.py runs the built ROM in PyBoy to the first
+  VBlankIntrWait (end of init), captures CPU registers, ROM/SRAM bank, I/O, OAM,
+  HRAM and VRAM/WRAM/SRAM banks 0-15 as 256-byte pages (zero pages are only
+  flagged), and patches them into space the build reserved
+  (runtime/gb_snapshot.asm). `SnapRestore` reinstates the state at boot and
+  resumes in HAL_VBLANKINTRWAIT. The snapshot is kept only if init lasted longer
+  than the estimated restore (+30 frames); `snapshot="force"` always patches.
+  Assumes init does not depend on input or on DIV.

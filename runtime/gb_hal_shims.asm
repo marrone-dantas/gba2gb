@@ -159,6 +159,8 @@ wRcT: ds 1
 wRcOff: ds 2
 wRcK: ds 1
 
+wVsLast:: ds 1                ; wFrame when VBlankIntrWait last returned (LATE_VSYNC)
+
 SECTION "obj_state", WRAMX[$D800]
 ; Phase P1: one byte per GBA object: bit 0 live (ever stored), bit 1 dirty (changed
 ; since the last compose). The native SM83 stack now starts at $E000 and grows down
@@ -173,6 +175,9 @@ SECTION "hal", ROM0
 HalStart:
     di
     ld sp, $E000
+IF DEF(SNAPSHOT)
+    call SnapRestore              ; resumes in HAL_VBLANKINTRWAIT when a snapshot is present
+ENDC
     ldh a, [rLCDC]
     bit 7, a
     jr z, .off
@@ -487,11 +492,22 @@ IF !DEF(PORT_OAM)
 ENDC
     ld a, [wFrame]
     ld b, a
+IF DEF(LATE_VSYNC)
+    ; a VBlank already passed since the previous VBlankIntrWait returned: the frame
+    ; took longer than 1/60 s, so waiting for the next one only adds idle time
+    ld a, [wVsLast]
+    cp b
+    jr nz, .late
+ENDC
 .w:
     halt
     ld a, [wFrame]
     cp b
     jr z, .w
+    ld b, a
+.late:
+    ld a, b
+    ld [wVsLast], a
     xor a
     ld [wNeedCompose], a
     jp VsyncDone
@@ -1940,6 +1956,9 @@ BgpFlat: db $00, $55, $AA, $FF   ; BG0 off: everything = L0
 INCLUDE "hal_luts.inc"
 INCLUDE "gb_audio_shims.asm"
 INCLUDE "gb_timer_shims.asm"
+IF DEF(SNAPSHOT)
+INCLUDE "gb_snapshot.asm"
+ENDC
 
 ; ---------------------------------------------------------------------------
 ; Phase 5 A1: run-time address-space dispatch for pointers whose provenance is
