@@ -42,3 +42,15 @@ Seeds are the same as the lockstep test (`tools/profile/seeds.py`).
 
 Dynamic ranges are **hints** (only cover the executed seeds); static ranges from
 `tools/prune` are the sound ones.
+
+## Hotspot report
+
+`python -m tools.ports.hotspots ROM --elf ELF --plan plan.json --frames N --from F`
+(or `build_port(..., profile=True, hotspots={"plan": ..., "frames": N, "from": F})`,
+which runs it right after the build) writes `<rom>.hotspots.md` and `.json`: self
+time per function, time with native helpers charged to the lifted caller, and for
+focus functions (default: top 3) the split by source line (addr2line), by helper
+and by direct callee. The PROFILE sampler stores 8-byte ring entries: PC, ROM bank,
+0, and the two stack words above the interrupted PC (the helper's return address).
+Helpers nested under other helpers (e.g. Div16Step under UDiv32by16) stay
+unattributed.

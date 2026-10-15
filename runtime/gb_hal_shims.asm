@@ -33,30 +33,41 @@ IF DEF(PROFILE)
 SECTION "prof_vec", ROM0[$48]
     jp ProfISR
 SECTION "prof_ram", WRAMX[$D700]
-wProfRing:: ds 252
+wProfRing:: ds 248              ; 31 entries of 8 bytes
 wProfIdx:: ds 1
 SECTION "prof_code", ROM0
 ProfISR:
+    ; ring entry (8 bytes): interrupted PC, ROM bank, 0, the two stack words above it
+    ; (return addresses when a native helper was interrupted; tools/ports/profile.py)
     push af
     push hl
     push de
-    ld hl, sp + 6
-    ld a, [hl+]
-    ld e, a
-    ld d, [hl]
+    push bc
+    ld hl, sp + 8
     ld a, [wProfIdx]
-    ld l, a
-    ld h, HIGH(wProfRing)
-    ld [hl], e
-    inc l
-    ld [hl], d
-    inc l
+    ld e, a
+    ld d, HIGH(wProfRing)
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    ld a, [hl+]
+    ld [de], a
+    inc e
     ld a, [wRomBank]
-    ld [hl+], a
-    ld [hl], 0
-    inc l
-    ld a, l
-    cp 252
+    ld [de], a
+    inc e
+    xor a
+    ld [de], a
+    inc e
+    ld b, 4
+.cp:
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .cp
+    ld a, e
+    cp 248
     jr c, .s
     xor a
 .s:
@@ -68,6 +79,7 @@ ProfISR:
     sub 153
 .l:
     ldh [$FF45], a
+    pop bc
     pop de
     pop hl
     pop af

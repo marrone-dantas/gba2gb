@@ -33,6 +33,8 @@ class Profiler:
         self.addr = {n: o for b, o, n in self.syms}
         self.last = 0
         self.hist = collections.Counter()
+        self.blocks = collections.Counter()      # lifted block (helpers folded into callers)
+        self.helpers = collections.Counter()     # (calling block, helper)
         self.total = 0
 
     def name(self, pc, bank):
@@ -42,15 +44,30 @@ class Profiler:
         return lst[i][1] if i >= 0 else f"?{b:02X}:{pc:04X}"
 
     def poll(self):
+        """Drain the ring (8-byte entries: PC, bank, 0, two stack words)."""
         m = self.pb.memory
         base = self.addr["wProfRing"]
         idx = m[self.addr["wProfIdx"]]
         i = self.last
         while i != idx:
             pc = m[base + i] | m[base + i + 1] << 8
-            self.hist[self.name(pc, m[base + i + 2])] += 1
+            bank = m[base + i + 2]
+            n = self.name(pc, bank)
+            self.hist[n] += 1
+            caller = None
+            if not n.startswith("L_"):
+                # a native / HAL routine: charge it to the lifted block that called it
+                for k in (4, 6):
+                    r = m[base + i + k] | m[base + i + k + 1] << 8
+                    c = self.name(r, bank)
+                    if c.startswith("L_"):
+                        caller = c
+                        break
+            self.blocks[caller or n] += 1
+            if caller:
+                self.helpers[(caller, n)] += 1
             self.total += 1
-            i = (i + 4) % 252
+            i = (i + 8) % 248
         self.last = idx
 
     def report(self, n=30, elf=None):
