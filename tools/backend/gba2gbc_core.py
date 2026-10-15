@@ -58,6 +58,8 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
             _ic.CONFIG[k] = port[k]
     _lift.EXTRA_NATIVES.update((port or {}).get("overrides", {}))
     saved_memo = dict(_lift.MEMO)
+    saved_clone = dict(_lift.CLONE)
+    _lift.CLONE["enabled"] = bool(port and port.get("specialize", _lift.CLONE.get("default", False)) and port.get("overrides") is not None)
     _lift.MEMO.clear()
     if port and port.get("memo", True) and port.get("overrides") is not None:
         from tools.lift.memo import find as memo_find
@@ -81,6 +83,8 @@ def build(src, out, entry="f", asm_out=None, prune=None, profile=None, opts=None
         _lift.EXTRA_NATIVES.update(saved[1])
         _lift.MEMO.clear()
         _lift.MEMO.update(saved_memo)
+        _lift.CLONE.clear()
+        _lift.CLONE.update(saved_clone)
 
 
 def _cosmetic(src, out, port):

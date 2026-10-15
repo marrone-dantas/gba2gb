@@ -88,3 +88,12 @@ read ROM, GBA VRAM or their own stack frame and that store only to their frame
 a 64-entry direct-mapped cache at $C100 keyed by function id and argument bytes.
 Any VRAM store (`HAL_VRAM_STORE16`) invalidates the cache. Disable with
 `"memo": false` in the port manifest.
+
+## Constant specialization (opt-in)
+
+With `"specialize": true` in the port manifest, `lift.Program._specialize` gives
+every distinct set of constant register arguments (r0-r3, set by `mov #imm` right
+before a `bl`) its own copy of the callee (at most `CLONE["per_func"]` per function,
+`CLONE["total"]` overall, non-recursive bodies up to `CLONE["max_ins"]` instructions),
+so range analysis sees exact argument values. Off by default: on the reference
+homebrew the extra code cost more (bank switches) than the narrowing gained.

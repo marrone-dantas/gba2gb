@@ -197,6 +197,11 @@ EXTRA_NATIVES: dict[str, str] = {}
 # Memoized map-pure functions {name: (id, param sizes)} (tools/lift/memo.py); set by
 # gba2gbc_core.build for ports.
 MEMO: dict[str, tuple] = {}
+# Step 9 constant specialization (Program._specialize): a call site that passes
+# constants in r0-r3 gets its own copy of the callee, so range analysis sees the
+# exact argument values. Clone k lives at original + CLONE_DELTA + k * 16 MiB.
+CLONE = {"enabled": False, "default": False, "max_ins": 160, "per_func": 4, "total": 48}
+CLONE_DELTA = 0x08000000
 
 
 def _override(name):
@@ -240,6 +245,9 @@ class Program:
         self.funcs = {self.entry}
         self.cfg = nx.DiGraph()
         self._decode()
+        self.clones = {}
+        if natives and CLONE["enabled"]:
+            self._specialize()
         self._build_cfg()
         self.divc = set()
         self.memo_used = {}
@@ -282,6 +290,76 @@ class Program:
                 if x.op in ("b", "ret", "pop_ret"):
                     break
                 a += x.size
+
+    def _const_args(self, bl, targets):
+        """Registers r0-r3 holding a constant at `bl` (straight-line scan back)."""
+        known, dead = {}, set()
+        a = bl.addr
+        for _ in range(10):
+            prev = next((p for p in (a - 2, a - 4) if p in self.ins and p + self.ins[p].size == a), None)
+            if prev is None or a in targets:
+                break
+            x = self.ins[prev]
+            if x.op in ("b", "bcc", "bl", "ret", "pop_ret"):
+                break
+            from tools.lift.defuse import defs
+            for r in defs(x):
+                if r in (0, 1, 2, 3) and r not in known and r not in dead:
+                    if x.op == "mov" and isinstance(x.a, int) and not x.s:
+                        known[r] = x.a
+                    elif x.op == "mov" and isinstance(x.a, int):
+                        known[r] = x.a
+                    else:
+                        dead.add(r)
+            a = prev
+        return known
+
+    def _body(self, entry):
+        """Intraprocedural instruction addresses of the function at `entry`."""
+        seen, work = set(), [entry]
+        while work:
+            a = work.pop()
+            while a in self.ins and a not in seen:
+                seen.add(a)
+                x = self.ins[a]
+                if x.op in ("b", "bcc"):
+                    work.append(x.target)
+                if x.op in ("b", "ret", "pop_ret"):
+                    break
+                a += x.size
+        return seen
+
+    def _specialize(self):
+        import copy
+        targets = {x.target for x in self.ins.values() if x.op in ("b", "bcc")}
+        groups = {}
+        for x in sorted(self.ins.values(), key=lambda i: i.addr):
+            if x.op != "bl" or x.native is not None or x.target == self.entry:
+                continue
+            k = self._const_args(x, targets)
+            if k:
+                groups.setdefault((x.target, tuple(sorted(k.items()))), []).append(x)
+        per, total = {}, 0
+        for (fn, consts), sites in sorted(groups.items(), key=lambda g: -len(g[1])):
+            if total >= CLONE["total"] or per.get(fn, 0) >= CLONE["per_func"]:
+                continue
+            body = self._body(fn)
+            if len(body) > CLONE["max_ins"] or any(self.ins[a].op == "bl" and self.ins[a].target == fn
+                                                     for a in body):
+                continue  # too big or recursive
+            per[fn] = per.get(fn, 0) + 1
+            total += 1
+            d = CLONE_DELTA + 0x01000000 * total
+            for a in body:
+                c = copy.copy(self.ins[a])
+                c.addr = a + d
+                if c.op in ("b", "bcc") and c.target in body:
+                    c.target += d
+                self.ins[c.addr] = c
+            self.funcs.add(fn + d)
+            for x in sites:
+                x.target = fn + d
+            self.clones[fn + d] = (fn, dict(consts))
 
     def _build_cfg(self):
         addrs = sorted(self.ins)
